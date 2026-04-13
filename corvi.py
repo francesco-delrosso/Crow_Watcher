@@ -333,7 +333,7 @@ def comprimi_video(percorso_originale):
         "-i", percorso_originale,
         "-vf", f"scale={larghezza}:{altezza}",
         "-c:v", "libx264",
-        "-crf", "28",
+        "-crf", "18",
         "-preset", "fast",
         "-r", str(FPS_TELEGRAM),
         "-an",

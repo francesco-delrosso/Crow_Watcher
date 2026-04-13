@@ -17,6 +17,7 @@ import time     # funzioni per misurare il tempo
 import os       # funzioni per gestire file e cartelle
 import requests    # invia file e messaggi via internet (Telegram)
 import subprocess  # esegue programmi esterni (ffmpeg per comprimere il video)
+import threading   # permette di eseguire l'AI in parallelo alla registrazione
 from config import TELEGRAM_TOKEN  # token segreto, non nel codice pubblico
 
 # ============================================================
@@ -43,9 +44,9 @@ CLASSE_UCCELLO = 14
 # Dimensione immagine richiesta dal modello (sempre 640x640 per YOLOv8)
 DIMENSIONE_MODELLO = 640
 
-# Analizza con l'AI solo ogni N fotogrammi per risparmiare CPU
-# 15 = analisi ogni 15 fotogrammi — l'AI blocca meno il loop, più frame scritti
-ANALIZZA_OGNI_N_FRAME = 15
+# Quante volte al secondo il thread AI analizza un frame
+# 2 = due analisi al secondo — abbastanza per rilevare un corvo senza pesare sulla CPU
+ANALISI_AL_SECONDO = 2
 
 # Secondi minimi di presenza del corvo per salvare il video
 # Se il corvo è stato visibile meno di 10 secondi in totale, il file viene eliminato
@@ -152,6 +153,39 @@ def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
             })
 
     return uccelli_trovati
+
+
+# ============================================================
+# FUNZIONE: thread separato che esegue l'AI in background
+# Mentre questo thread analizza, il loop principale scrive video senza interruzioni
+# ============================================================
+def thread_ai(rete_ai, stato):
+    # stato è un dizionario condiviso tra il thread AI e il loop principale
+    # Usiamo un dizionario perché in Python è il modo più semplice
+    # per condividere dati tra thread in modo sicuro
+    while stato['attivo']:
+        # Prendiamo una copia del frame più recente in modo sicuro
+        with stato['lock_frame']:
+            if stato['frame'] is None:
+                time.sleep(0.05)
+                continue
+            frame_da_analizzare = stato['frame'].copy()
+
+        # Eseguiamo l'analisi AI sul frame copiato
+        # Questo può richiedere 1-2 secondi sul tablet, ma non blocca la registrazione
+        risultato = trova_uccelli(
+            rete_ai,
+            frame_da_analizzare,
+            stato['larghezza'],
+            stato['altezza']
+        )
+
+        # Salviamo il risultato in modo sicuro
+        with stato['lock_uccelli']:
+            stato['uccelli'] = risultato
+
+        # Aspettiamo prima della prossima analisi
+        time.sleep(1.0 / ANALISI_AL_SECONDO)
 
 
 # ============================================================
@@ -440,25 +474,37 @@ def main():
 
     print(f"Fotocamera: {larghezza}x{altezza} @ {fps}fps")
 
+    # --- STATO CONDIVISO CON IL THREAD AI ---
+    # Dizionario condiviso tra il loop principale e il thread AI
+    stato = {
+        'attivo':       True,          # False = ferma il thread AI
+        'frame':        None,          # frame più recente da analizzare
+        'uccelli':      [],            # risultato dell'ultima analisi
+        'larghezza':    larghezza,     # dimensioni del frame
+        'altezza':      altezza,
+        'lock_frame':   threading.Lock(),   # protezione accesso al frame
+        'lock_uccelli': threading.Lock(),   # protezione accesso agli uccelli
+    }
+
+    # Avviamo il thread AI in background
+    # daemon=True = il thread si ferma automaticamente quando il programma esce
+    t_ai = threading.Thread(target=thread_ai, args=(rete_ai, stato), daemon=True)
+    t_ai.start()
+    print("Thread AI avviato in background")
+
     # --- VARIABILI DI STATO ---
 
     sta_registrando        = False  # True = stiamo registrando
     scrittore_video        = None   # oggetto che scrive il file video
     tempo_ultimo_corvo     = None   # quando abbiamo visto l'ultimo uccello
     nome_file_video        = None   # nome del file video corrente
-    contatore_frame        = 0      # conta i frame per sapere quando analizzare
-    uccelli_correnti       = []     # risultato dell'ultima analisi AI
     secondi_corvo_totali   = 0.0    # quanti secondi il corvo è stato visibile in questa registrazione
     ultimo_tick_corvo      = None   # timestamp dell'ultimo frame in cui il corvo era visibile
-                                    # serve per calcolare quanto tempo è rimasto in inquadratura
 
     print("\n" + "=" * 55)
     print("  Monitoraggio ATTIVO — Premi CTRL+C per uscire")
     print(f"  Timer di stop: {SECONDI_SENZA_CORVO} secondi")
     print("=" * 55 + "\n")
-
-    # Calcoliamo quanti secondi aspettare tra un frame e l'altro
-    pausa_per_frame = 1.0 / FPS_SALVATAGGIO
 
     # Timestamp dell'ultimo controllo nuovi utenti Telegram
     ultimo_controllo_utenti = 0
@@ -468,31 +514,29 @@ def main():
     try:
         while True:
 
-            # Aspettiamo il tempo giusto prima di leggere il prossimo frame
-            # Questo evita di leggere sempre lo stesso frame in cache dallo stream HTTP
-            time.sleep(pausa_per_frame)
-
-            # Leggiamo un fotogramma dalla fotocamera
+            # Leggiamo un fotogramma dalla fotocamera il più veloce possibile
+            # Il thread AI lavora in parallelo e non blocca mai questo ciclo
             successo, frame = fotocamera.read()
 
             # Se il frame non è valido, saltiamo
             if not successo or frame is None:
+                time.sleep(0.01)
                 continue
 
-            contatore_frame += 1
-
-            # Analizziamo con l'AI solo ogni ANALIZZA_OGNI_N_FRAME frame
-            if contatore_frame % ANALIZZA_OGNI_N_FRAME == 0:
-                uccelli_correnti = trova_uccelli(
-                    rete_ai, frame, larghezza, altezza
-                )
+            # Aggiorniamo il frame condiviso con il thread AI
+            with stato['lock_frame']:
+                stato['frame'] = frame
 
             momento_attuale = time.time()
 
-            # Ogni 30 secondi controlliamo se ci sono nuovi utenti che hanno scritto al bot
+            # Ogni 30 secondi controlliamo se ci sono nuovi utenti Telegram
             if momento_attuale - ultimo_controllo_utenti >= 30:
                 registra_nuovi_utenti()
                 ultimo_controllo_utenti = momento_attuale
+
+            # Leggiamo il risultato più recente del thread AI (senza aspettarlo)
+            with stato['lock_uccelli']:
+                uccelli_correnti = stato['uccelli']
 
             # C'è almeno un uccello visibile?
             corvo_visibile = len(uccelli_correnti) > 0
@@ -580,6 +624,7 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\nInterruzione ricevuta, chiusura...")
+        stato['attivo'] = False  # diciamo al thread AI di fermarsi
 
     finally:
         # Se la registrazione era in corso al momento dell'interruzione,

@@ -487,6 +487,8 @@ def main():
                     rete_ai, frame, larghezza, altezza
                 )
 
+            momento_attuale = time.time()
+
             # Ogni 30 secondi controlliamo se ci sono nuovi utenti che hanno scritto al bot
             if momento_attuale - ultimo_controllo_utenti >= 30:
                 registra_nuovi_utenti()
@@ -494,8 +496,6 @@ def main():
 
             # C'è almeno un uccello visibile?
             corvo_visibile = len(uccelli_correnti) > 0
-
-            momento_attuale = time.time()
 
 
             if corvo_visibile:

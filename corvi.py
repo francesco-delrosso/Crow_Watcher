@@ -55,6 +55,10 @@ DIMENSIONE_MODELLO = 640
 # 2 = due analisi al secondo — abbastanza per rilevare un corvo senza pesare sulla CPU
 ANALISI_AL_SECONDO = 2
 
+# Modalità debug: True = stampa tutto quello che l'AI vede (anche sotto soglia)
+# Utile per capire perché non rileva nulla. Metti False quando tutto funziona.
+DEBUG_AI = True
+
 # Secondi minimi di presenza del corvo per salvare il video
 # Se il corvo è stato visibile meno di 10 secondi in totale, il file viene eliminato
 SECONDI_MINIMI_CORVO = 5
@@ -132,6 +136,7 @@ def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
     scala_y = altezza_frame / DIMENSIONE_MODELLO
 
     uccelli_trovati = []
+    miglior_rilevamento = (0, -1)  # (confidenza, classe) del rilevamento più alto visto
 
     for rilevamento in predizioni:
         # Colonne 4-83 = punteggi delle 80 classi di oggetti
@@ -140,6 +145,10 @@ def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
         # Troviamo la classe con il punteggio più alto
         classe_migliore = int(np.argmax(punteggi_classi))
         confidenza = float(punteggi_classi[classe_migliore])
+
+        # Teniamo traccia del rilevamento più alto (qualsiasi classe) per il debug
+        if confidenza > miglior_rilevamento[0]:
+            miglior_rilevamento = (confidenza, classe_migliore)
 
         # Accettiamo solo se è un uccello con confidenza sufficiente
         if classe_migliore == CLASSE_UCCELLO and confidenza >= SOGLIA_CONFIDENZA:
@@ -161,6 +170,19 @@ def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
                 'x2': x2, 'y2': y2,
                 'confidenza': confidenza
             })
+
+    # In modalità debug stampiamo cosa ha visto l'AI
+    if DEBUG_AI:
+        conf, classe = miglior_rilevamento
+        if conf > 0.05:
+            nomi_classi = {
+                0:'persona', 14:'uccello', 15:'gatto', 16:'cane',
+                17:'cavallo', 18:'pecora', 19:'mucca', 2:'auto',
+                63:'laptop', 67:'telefono'
+            }
+            nome = nomi_classi.get(classe, f'classe_{classe}')
+            marker = " <<< UCCELLO!" if classe == CLASSE_UCCELLO else ""
+            print(f"[DEBUG] {nome} {conf*100:.1f}%{marker}   ", end='\r')
 
     return uccelli_trovati
 

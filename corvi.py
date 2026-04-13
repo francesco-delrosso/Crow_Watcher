@@ -238,16 +238,19 @@ def thread_lettura_fotocamera(url, stato):
 # Mentre questo thread analizza, il loop principale scrive video senza interruzioni
 # ============================================================
 def thread_ai(rete_ai, stato):
-    # stato è un dizionario condiviso tra il thread AI e il loop principale
-    # Usiamo un dizionario perché in Python è il modo più semplice
-    # per condividere dati tra thread in modo sicuro
     while stato['attivo']:
-        # Prendiamo una copia del frame più recente in modo sicuro
+        # Prendiamo una copia del frame FUORI dal lock il prima possibile
+        # Il lock deve essere tenuto il minimo indispensabile
+        frame_da_analizzare = None
         with stato['lock_frame']:
-            if stato['frame'] is None:
-                time.sleep(0.05)
-                continue
-            frame_da_analizzare = stato['frame'].copy()
+            if stato['frame'] is not None:
+                frame_da_analizzare = stato['frame'].copy()
+
+        # Se non c'è ancora un frame, aspettiamo FUORI dal lock
+        # (prima il sleep era DENTRO il lock — bloccava il thread camera)
+        if frame_da_analizzare is None:
+            time.sleep(0.05)
+            continue
 
         # Eseguiamo l'analisi AI sul frame copiato
         # Questo può richiedere 1-2 secondi sul tablet, ma non blocca la registrazione

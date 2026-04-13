@@ -64,6 +64,9 @@ RISOLUZIONE_TELEGRAM = (854, 480)
 FPS_TELEGRAM = 60
 
 # --- IMPOSTAZIONI TELEGRAM ---
+# Nome del canale Telegram dove pubblicare i video (con la @)
+TELEGRAM_CANALE = "@crowwatcher"
+
 # File dove vengono salvati i Chat ID di tutti gli utenti che hanno avviato il bot
 # Ogni volta che qualcuno manda /start al bot, il suo ID viene aggiunto qui
 FILE_UTENTI = "/sdcard/rilevatore_corvi/utenti.txt"
@@ -375,14 +378,11 @@ def invia_video_telegram(percorso_video, secondi_visibile):
     # Prima comprimiamo il video per Telegram
     percorso_da_inviare = comprimi_video(percorso_video)
 
-    # Leggiamo la lista di tutti gli utenti registrati
+    # Lista destinatari: canale fisso + tutti gli utenti registrati
     utenti = leggi_utenti()
+    destinatari = [TELEGRAM_CANALE] + utenti
 
-    if not utenti:
-        print("[TELEGRAM] Nessun utente registrato — nessuno scritto /start al bot")
-        return
-
-    print(f"[TELEGRAM] Invio a {len(utenti)} utente/i...")
+    print(f"[TELEGRAM] Invio al canale + {len(utenti)} utente/i...")
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
 
@@ -398,7 +398,7 @@ def invia_video_telegram(percorso_video, secondi_visibile):
         with open(percorso_da_inviare, 'rb') as file_video:
             contenuto_video = file_video.read()  # leggiamo il file in memoria
 
-        for chat_id in utenti:
+        for chat_id in destinatari:
             try:
                 risposta = requests.post(
                     url,

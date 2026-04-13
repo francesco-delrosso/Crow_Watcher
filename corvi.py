@@ -11,10 +11,17 @@
 #       NON serve installare onnxruntime
 # ============================================================
 
+import os       # funzioni per gestire file e cartelle
+
+# Silenziamo ffmpeg PRIMA di importare cv2
+# Senza questa riga ffmpeg spamma centinaia di warning "Expected boundary"
+# per ogni frame letto dallo stream MJPEG di IP Webcam
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "loglevel;quiet"
+os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+
 import cv2      # gestisce fotocamera, immagini, video E il motore AI
 import numpy as np  # calcoli matematici rapidi sulle immagini
 import time     # funzioni per misurare il tempo
-import os       # funzioni per gestire file e cartelle
 import requests    # invia file e messaggi via internet (Telegram)
 import subprocess  # esegue programmi esterni (ffmpeg per comprimere il video)
 import threading   # permette di eseguire l'AI in parallelo alla registrazione
@@ -156,6 +163,52 @@ def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
             })
 
     return uccelli_trovati
+
+
+# ============================================================
+# FUNZIONE: thread che legge lo stream MJPEG direttamente con requests
+# Questo bypassa completamente ffmpeg ed elimina gli errori "Expected boundary"
+# ============================================================
+def thread_lettura_fotocamera(url, stato):
+    try:
+        # Apriamo lo stream HTTP in modalità streaming (non scarica tutto in una volta)
+        stream = requests.get(url, stream=True, timeout=10)
+        buffer = bytes()  # buffer dove accumuliamo i dati ricevuti
+
+        for chunk in stream.iter_content(chunk_size=4096):
+            # Se il programma sta chiudendo, usciamo dal loop
+            if not stato['attivo']:
+                break
+
+            buffer += chunk  # aggiungiamo il chunk al buffer
+
+            # Un frame JPEG inizia sempre con i byte FF D8 e finisce con FF D9
+            inizio = buffer.find(b'\xff\xd8')  # inizio JPEG
+            fine   = buffer.find(b'\xff\xd9')  # fine JPEG
+
+            if inizio != -1 and fine != -1 and fine > inizio:
+                # Abbiamo un frame completo: estraiamolo
+                jpg_bytes = buffer[inizio:fine + 2]
+                # Teniamo nel buffer solo i dati dopo questo frame
+                buffer = buffer[fine + 2:]
+
+                # Decodifichiamo i bytes JPEG in un array immagine OpenCV
+                frame = cv2.imdecode(
+                    np.frombuffer(jpg_bytes, dtype=np.uint8),
+                    cv2.IMREAD_COLOR
+                )
+
+                if frame is not None:
+                    with stato['lock_frame']:
+                        stato['frame'] = frame
+                        # Al primo frame valido salviamo larghezza e altezza
+                        if stato['larghezza'] == 0:
+                            stato['altezza']   = frame.shape[0]
+                            stato['larghezza'] = frame.shape[1]
+
+    except Exception as e:
+        print(f"\n[CAMERA] Errore stream: {e}")
+        stato['camera_errore'] = True
 
 
 # ============================================================
@@ -449,45 +502,59 @@ def main():
     rete_ai = cv2.dnn.readNetFromONNX(MODELLO_AI)
     print("Modello AI caricato!")
 
-    # --- APERTURA FOTOCAMERA VIA IP WEBCAM ---
+    # --- APERTURA FOTOCAMERA VIA IP WEBCAM (lettura diretta, senza ffmpeg) ---
 
-    print("\nConnessione alla fotocamera via IP Webcam...")
-    # L'app IP Webcam crea uno stream video accessibile via HTTP
-    # 127.0.0.1 = questo stesso tablet, 8080 = porta di default
     URL_STREAM = "http://127.0.0.1:8080/video"
-    fotocamera = cv2.VideoCapture(URL_STREAM)
+    print(f"\nConnessione allo stream: {URL_STREAM}")
 
-    if not fotocamera.isOpened():
+    # Testiamo che IP Webcam sia raggiungibile prima di partire
+    try:
+        test = requests.get(URL_STREAM, stream=True, timeout=5)
+        test.close()
+    except Exception:
         print("\nERRORE: Impossibile connettersi allo stream!")
-        print("Controlla che:")
-        print("  1. L'app IP Webcam sia aperta")
-        print("  2. Hai toccato 'Avvia server' in fondo all'app")
-        print(f"  3. URL usato: {URL_STREAM}")
+        print("  1. Apri l'app IP Webcam")
+        print("  2. Tocca 'Avvia server' in fondo")
         return
 
-    # Leggiamo le dimensioni effettive dello stream
-    larghezza = int(fotocamera.get(cv2.CAP_PROP_FRAME_WIDTH))
-    altezza   = int(fotocamera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps       = int(fotocamera.get(cv2.CAP_PROP_FPS))
-    if fps <= 0:
-        fps = 25  # valore di sicurezza se non rilevato
+    # Dimensioni iniziali zero — verranno aggiornate dal thread al primo frame
+    larghezza = 0
+    altezza   = 0
+    fps       = FPS_SALVATAGGIO
 
-    print(f"Fotocamera: {larghezza}x{altezza} @ {fps}fps")
-
-    # --- STATO CONDIVISO CON IL THREAD AI ---
-    # Dizionario condiviso tra il loop principale e il thread AI
+    # --- STATO CONDIVISO TRA TUTTI I THREAD ---
     stato = {
-        'attivo':       True,          # False = ferma il thread AI
-        'frame':        None,          # frame più recente da analizzare
-        'uccelli':      [],            # risultato dell'ultima analisi
-        'larghezza':    larghezza,     # dimensioni del frame
-        'altezza':      altezza,
-        'lock_frame':   threading.Lock(),   # protezione accesso al frame
-        'lock_uccelli': threading.Lock(),   # protezione accesso agli uccelli
+        'attivo':        True,               # False = ferma tutti i thread
+        'frame':         None,               # frame più recente dalla fotocamera
+        'uccelli':       [],                 # risultato dell'ultima analisi AI
+        'larghezza':     0,                  # aggiornato al primo frame
+        'altezza':       0,                  # aggiornato al primo frame
+        'camera_errore': False,              # True se il thread camera ha avuto errori
+        'lock_frame':    threading.Lock(),   # protezione accesso al frame
+        'lock_uccelli':  threading.Lock(),   # protezione accesso agli uccelli
     }
 
+    # Avviamo il thread che legge lo stream MJPEG (senza ffmpeg)
+    t_camera = threading.Thread(target=thread_lettura_fotocamera, args=(URL_STREAM, stato), daemon=True)
+    t_camera.start()
+    print("Thread fotocamera avviato")
+
+    # Aspettiamo il primo frame valido (max 10 secondi)
+    print("Attesa primo frame...", end='')
+    for _ in range(100):
+        time.sleep(0.1)
+        if stato['larghezza'] > 0:
+            break
+    if stato['larghezza'] == 0:
+        print("\nERRORE: nessun frame ricevuto. Controlla IP Webcam.")
+        stato['attivo'] = False
+        return
+
+    larghezza = stato['larghezza']
+    altezza   = stato['altezza']
+    print(f" OK! Risoluzione: {larghezza}x{altezza}")
+
     # Avviamo il thread AI in background
-    # daemon=True = il thread si ferma automaticamente quando il programma esce
     t_ai = threading.Thread(target=thread_ai, args=(rete_ai, stato), daemon=True)
     t_ai.start()
     print("Thread AI avviato in background")
@@ -511,21 +578,21 @@ def main():
 
     # --- CICLO PRINCIPALE ---
 
+    ultimo_frame_processato = None  # evitiamo di processare lo stesso frame due volte
+
     try:
         while True:
 
-            # Leggiamo un fotogramma dalla fotocamera il più veloce possibile
-            # Il thread AI lavora in parallelo e non blocca mai questo ciclo
-            successo, frame = fotocamera.read()
+            # Leggiamo il frame più recente dal thread fotocamera
+            with stato['lock_frame']:
+                frame = stato['frame']
 
-            # Se il frame non è valido, saltiamo
-            if not successo or frame is None:
-                time.sleep(0.01)
+            # Se non c'è ancora un frame o è lo stesso di prima, aspettiamo
+            if frame is None or frame is ultimo_frame_processato:
+                time.sleep(0.005)
                 continue
 
-            # Aggiorniamo il frame condiviso con il thread AI
-            with stato['lock_frame']:
-                stato['frame'] = frame
+            ultimo_frame_processato = frame
 
             momento_attuale = time.time()
 
@@ -638,7 +705,7 @@ def main():
                 os.remove(nome_file_video)
                 print(f"[ELIMINATO] Corvo visibile solo {secondi_corvo_totali:.0f}s — video scartato")
 
-        fotocamera.release()
+        stato['attivo'] = False  # ferma anche il thread camera
         print("Programma terminato.")
 
 

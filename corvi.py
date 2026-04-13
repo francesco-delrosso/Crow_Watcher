@@ -17,6 +17,7 @@ import time     # funzioni per misurare il tempo
 import os       # funzioni per gestire file e cartelle
 import requests    # invia file e messaggi via internet (Telegram)
 import subprocess  # esegue programmi esterni (ffmpeg per comprimere il video)
+from config import TELEGRAM_TOKEN  # token segreto, non nel codice pubblico
 
 # ============================================================
 # IMPOSTAZIONI - Modifica questi valori se necessario
@@ -62,10 +63,13 @@ RISOLUZIONE_TELEGRAM = (854, 480)
 FPS_TELEGRAM = 60
 
 # --- IMPOSTAZIONI TELEGRAM ---
-# Token del bot creato con @BotFather
-TELEGRAM_TOKEN  = "8742079341:AAF7HN8ZVcxwQp-wH0oc75pX6vC5yNNBkjs"
-# Il tuo Chat ID (ricevuto con getUpdates)
-TELEGRAM_CHAT_ID = "155938019"
+# File dove vengono salvati i Chat ID di tutti gli utenti che hanno avviato il bot
+# Ogni volta che qualcuno manda /start al bot, il suo ID viene aggiunto qui
+FILE_UTENTI = "/sdcard/rilevatore_corvi/utenti.txt"
+
+# File dove salviamo l'ultimo aggiornamento Telegram letto
+# Serve per non rileggere sempre gli stessi messaggi
+FILE_OFFSET = "/sdcard/rilevatore_corvi/telegram_offset.txt"
 
 
 # ============================================================
@@ -177,6 +181,98 @@ def disegna_rilevamenti(frame, uccelli):
 
 
 # ============================================================
+# FUNZIONE: legge la lista degli utenti salvati nel file utenti.txt
+# ============================================================
+def leggi_utenti():
+    # Se il file non esiste ancora, restituiamo lista vuota
+    if not os.path.exists(FILE_UTENTI):
+        return []
+    with open(FILE_UTENTI, 'r') as f:
+        # Leggiamo ogni riga, rimuoviamo spazi vuoti, saltiamo righe vuote
+        return [riga.strip() for riga in f.readlines() if riga.strip()]
+
+
+# ============================================================
+# FUNZIONE: controlla se ci sono nuovi utenti che hanno scritto /start al bot
+# Va chiamata periodicamente nel ciclo principale
+# ============================================================
+def registra_nuovi_utenti():
+    # Leggiamo l'offset — cioè l'ID dell'ultimo messaggio già elaborato
+    # Serve per non rileggere sempre gli stessi messaggi vecchi
+    offset = 0
+    if os.path.exists(FILE_OFFSET):
+        with open(FILE_OFFSET, 'r') as f:
+            contenuto = f.read().strip()
+            if contenuto:
+                offset = int(contenuto)
+
+    try:
+        # Chiamiamo l'API Telegram per ricevere i nuovi messaggi
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        risposta = requests.get(
+            url,
+            params={'offset': offset, 'timeout': 2},
+            timeout=5
+        )
+
+        if risposta.status_code != 200:
+            return
+
+        dati = risposta.json()
+        aggiornamenti = dati.get('result', [])
+
+        if not aggiornamenti:
+            return
+
+        # Carichiamo gli utenti già registrati per non aggiungere duplicati
+        utenti_esistenti = set(leggi_utenti())
+        nuovi_trovati = []
+
+        for aggiornamento in aggiornamenti:
+            # Aggiorniamo l'offset: usiamo l'ID di questo messaggio + 1
+            # così la prossima volta partiamo dal messaggio successivo
+            nuovo_offset = aggiornamento['update_id'] + 1
+            if nuovo_offset > offset:
+                offset = nuovo_offset
+
+            # Controlliamo se c'è un messaggio di testo
+            messaggio = aggiornamento.get('message', {})
+            testo = messaggio.get('text', '')
+            chat_id = str(messaggio.get('chat', {}).get('id', ''))
+
+            # Registriamo chiunque scriva qualcosa al bot (non solo /start)
+            # così anche il tuo amico viene aggiunto automaticamente
+            if chat_id and chat_id not in utenti_esistenti:
+                utenti_esistenti.add(chat_id)
+                nuovi_trovati.append(chat_id)
+                print(f"[TELEGRAM] Nuovo utente registrato: {chat_id}")
+
+                # Mandiamo un messaggio di benvenuto al nuovo utente
+                requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    data={
+                        'chat_id': chat_id,
+                        'text': "Ciao! Sei registrato. Riceverai i video quando viene rilevato un corvo."
+                    },
+                    timeout=10
+                )
+
+        # Salviamo i nuovi utenti nel file
+        if nuovi_trovati:
+            with open(FILE_UTENTI, 'a') as f:
+                for uid in nuovi_trovati:
+                    f.write(uid + '\n')
+
+        # Salviamo il nuovo offset
+        with open(FILE_OFFSET, 'w') as f:
+            f.write(str(offset))
+
+    except Exception:
+        # Se c'è un errore di rete ignoriamo silenziosamente
+        pass
+
+
+# ============================================================
 # FUNZIONE: crea una versione compressa del video per Telegram
 # Usa ffmpeg con codec H.264, molto più efficiente di mp4v
 # ============================================================
@@ -245,7 +341,14 @@ def invia_video_telegram(percorso_video, secondi_visibile):
     # Prima comprimiamo il video per Telegram
     percorso_da_inviare = comprimi_video(percorso_video)
 
-    print(f"[TELEGRAM] Invio video in corso...")
+    # Leggiamo la lista di tutti gli utenti registrati
+    utenti = leggi_utenti()
+
+    if not utenti:
+        print("[TELEGRAM] Nessun utente registrato — nessuno scritto /start al bot")
+        return
+
+    print(f"[TELEGRAM] Invio a {len(utenti)} utente/i...")
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
 
@@ -257,35 +360,32 @@ def invia_video_telegram(percorso_video, secondi_visibile):
     )
 
     try:
+        # Apriamo il file una volta sola e lo mandiamo a tutti
         with open(percorso_da_inviare, 'rb') as file_video:
-            risposta = requests.post(
-                url,
-                data={
-                    'chat_id': TELEGRAM_CHAT_ID,
-                    'caption': didascalia,
-                },
-                files={
-                    'video': file_video
-                },
-                timeout=180  # 3 minuti per l'upload
-            )
+            contenuto_video = file_video.read()  # leggiamo il file in memoria
 
-        if risposta.status_code == 200:
-            print("[TELEGRAM] Video inviato con successo!")
-        else:
-            print(f"[TELEGRAM] Errore invio: codice {risposta.status_code}")
-            print(f"[TELEGRAM] Dettaglio: {risposta.text}")
+        for chat_id in utenti:
+            try:
+                risposta = requests.post(
+                    url,
+                    data={'chat_id': chat_id, 'caption': didascalia},
+                    files={'video': ('video.mp4', contenuto_video, 'video/mp4')},
+                    timeout=180
+                )
+                if risposta.status_code == 200:
+                    print(f"[TELEGRAM] Inviato a {chat_id}")
+                else:
+                    print(f"[TELEGRAM] Errore per {chat_id}: {risposta.status_code}")
+            except Exception as e:
+                print(f"[TELEGRAM] Errore per {chat_id}: {e}")
 
-    except requests.exceptions.Timeout:
-        print("[TELEGRAM] Timeout: connessione lenta o video troppo grande")
     except requests.exceptions.ConnectionError:
         print("[TELEGRAM] Errore: nessuna connessione internet")
     except Exception as e:
         print(f"[TELEGRAM] Errore imprevisto: {e}")
 
     finally:
-        # Cancelliamo il file compresso temporaneo (_tg) dopo l'invio
-        # Il file originale ad alta qualità rimane sul tablet
+        # Cancelliamo il file compresso temporaneo dopo l'invio
         if percorso_da_inviare != percorso_video and os.path.exists(percorso_da_inviare):
             os.remove(percorso_da_inviare)
             print("[TELEGRAM] File temporaneo eliminato")
@@ -358,8 +458,10 @@ def main():
     print("=" * 55 + "\n")
 
     # Calcoliamo quanti secondi aspettare tra un frame e l'altro
-    # 1 diviso 30fps = 0.033 secondi = 33 millisecondi
     pausa_per_frame = 1.0 / FPS_SALVATAGGIO
+
+    # Timestamp dell'ultimo controllo nuovi utenti Telegram
+    ultimo_controllo_utenti = 0
 
     # --- CICLO PRINCIPALE ---
 
@@ -385,10 +487,16 @@ def main():
                     rete_ai, frame, larghezza, altezza
                 )
 
+            # Ogni 30 secondi controlliamo se ci sono nuovi utenti che hanno scritto al bot
+            if momento_attuale - ultimo_controllo_utenti >= 30:
+                registra_nuovi_utenti()
+                ultimo_controllo_utenti = momento_attuale
+
             # C'è almeno un uccello visibile?
             corvo_visibile = len(uccelli_correnti) > 0
 
             momento_attuale = time.time()
+
 
             if corvo_visibile:
                 # Uccello visibile: resettiamo il timer dei 30 secondi

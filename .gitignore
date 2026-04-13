@@ -1,0 +1,10 @@
+# File con dati personali - non caricare su GitHub
+config.py
+utenti.txt
+telegram_offset.txt
+
+# Modello AI - troppo grande per GitHub
+*.onnx
+
+# Video registrati
+*.mp4

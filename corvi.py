@@ -41,18 +41,26 @@ DEBUG_AI                = True
 
 # Frasi casuali sui corvi per il messaggio Telegram
 FRASI_CORVI = [
-    "🧠 IQ stimato: più alto del tuo vicino di casa.",
-    "👁️ Ti sta guardando. Ti ha già catalogato. Sa dove abiti.",
-    "🎁 Porta doni alle persone che gli piacciono. Tu non hai ancora ricevuto niente.",
-    "🚗 Usa le macchine per schiacciare le noci. Fondamentalmente guida meglio di molti.",
-    "🗣️ Può imitare la voce umana. Probabilmente lo sta già facendo.",
-    "☃️ Gioca nella neve per puro divertimento. Ha più work-life balance di te.",
-    "💀 Un gruppo di corvi si chiama 'omicidio'. Nomen omen.",
-    "🧳 Se lo tratti male, se lo ricorda. Per anni. Pianifica la vendetta con calma.",
-    "🔧 Usa strumenti, risolve puzzle, apre contenitori. Candidato ideale per molti lavori.",
-    "📡 Comunica con oltre 250 vocalizzi. Più di quanto tu faccia con i tuoi coinquilini.",
-    "👶 Riconosce i volti umani meglio di alcuni sistemi di sorveglianza.",
-    "🏆 Ha superato i test cognitivi progettati per i bambini di 7 anni. In meno tempo.",
+    "🐦‍⬛ È venuto, ha visto, ha giudicato silenziosamente, se n'è andato.",
+    "💀 Un gruppo di corvi si chiama 'omicidio'. Il nome lo hanno scelto loro.",
+    "🧠 QI superiore alla media. Non tua, quella dei corvidi.",
+    "👁️ Ti ha già visto. Già catalogato. Ha già deciso cosa pensa di te.",
+    "🎁 Porta regali alle persone che gli piacciono. Rifletti sul fatto che a te non ha portato niente.",
+    "🚗 Usa le macchine per schiacciare le noci. Ha capito come sfruttare gli umani.",
+    "😤 Se lo offendi, aspetta. Mesi. Anni se necessario. Non ha fretta.",
+    "🪞 Ha superato il test dello specchio. Molti influencer no.",
+    "📱 Riconosce i volti umani e li ricorda. È fondamentalmente TikTok ma con le ali.",
+    "🎭 Può fare il morto per ingannare i predatori. Tecnica usata anche in molte riunioni di lavoro.",
+    "🌍 Vive su ogni continente tranne l'Antartide. Ha fatto scelte migliori di molti.",
+    "👶 Insegna ai piccoli cosa fare e cosa non fare. Sistema educativo: funzionante.",
+    "🕵️ Usa ramoscelli come strumenti. Ha inventato il bastone prima di noi.",
+    "☃️ Gioca nella neve per divertimento puro. Ha più equilibrio vita-lavoro di qualsiasi CEO.",
+    "🗣️ Dialetti diversi tra corvi di zone diverse. Più cultura linguistica del turista medio.",
+    "🤝 Si aiutano a vicenda anche senza essere parenti. Concetto rivoluzionario.",
+    "🧩 Risolve puzzle a più step. Ha scoperto come funzionano le cause-effetto. Congratulazioni.",
+    "😴 Dorme in gruppi enormi per sicurezza. Introvertito di giorno, animale sociale di notte.",
+    "🎓 Ha un cervello grande rispetto al corpo quanto quello dei delfini. Anche lui non nuota.",
+    "📦 Nasconde il cibo e ricorda centinaia di nascondigli. Funziona meglio di Google Maps.",
 ]
 
 # ============================================================

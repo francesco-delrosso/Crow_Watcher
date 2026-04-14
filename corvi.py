@@ -268,8 +268,8 @@ def comprimi_video(percorso_originale):
 def invia_video_telegram(percorso_video, secondi_visibile, timestamp_inizio):
     percorso_da_inviare = comprimi_video(percorso_video)
     utenti      = leggi_utenti()
-    destinatari = [TELEGRAM_CANALE] + utenti
-    print(f"[TELEGRAM] Invio a {len(destinatari)} destinatari...")
+    destinatari = [TELEGRAM_CANALE]
+    print(f"[TELEGRAM] Invio al canale {TELEGRAM_CANALE}...")
 
     # Costruiamo il messaggio divertente
     n_oggi    = conta_avvistamenti_oggi()

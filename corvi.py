@@ -29,6 +29,7 @@ DIMENSIONE_MODELLO      = 640
 ZONA_RILEVAMENTO        = 0.70   # analizza solo il top X% del frame (es. 0.70 = ignora il 30% in basso)
 ANALIZZA_OGNI_N_FRAME   = 10
 SECONDI_MINIMI_CORVO    = 5
+SECONDI_BUFFER_FINE     = 4    # secondi di buffer dopo che il corvo sparisce
 RISOLUZIONE_SALVATAGGIO = (1280, 720)
 FPS_SALVATAGGIO         = 30
 RISOLUZIONE_TELEGRAM    = (854, 480)
@@ -402,8 +403,6 @@ def main():
                     sta_registrando = True
                     print(f"\n[REC] Inizio → {nome_file_video}")
 
-                # Scriviamo il frame SOLO quando il corvo è visibile
-                # Questo elimina i momenti morti dal video
                 scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
                 print(f"[REC] {len(uccelli_correnti)} corvo/i | {secondi_corvo_totali:.0f}s   ", end='\r')
 
@@ -412,6 +411,11 @@ def main():
 
                 if sta_registrando and tempo_ultimo_corvo is not None:
                     secondi_assenza = momento_attuale - tempo_ultimo_corvo
+
+                    # Buffer di fine: scrivi ancora qualche secondo dopo che il corvo sparisce
+                    if secondi_assenza < SECONDI_BUFFER_FINE:
+                        scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
+
                     secondi_rimasti = SECONDI_SENZA_CORVO - secondi_assenza
                     if secondi_rimasti > 0:
                         print(f"[TIMER] Stop tra {int(secondi_rimasti)}s | totale {secondi_corvo_totali:.0f}s   ", end='\r')

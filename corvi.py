@@ -40,16 +40,18 @@ DEBUG_AI                = True
 
 # Frasi casuali sui corvi per il messaggio Telegram
 FRASI_CORVI = [
-    "I corvi ricordano i volti umani per anni.",
-    "I corvi usano strumenti per risolvere problemi complessi.",
-    "Un gruppo di corvi si chiama 'omicidio' (murder of crows).",
-    "I corvi possono imitare la voce umana.",
-    "I corvi giocano nella neve solo per divertimento.",
-    "I corvi portano doni alle persone che gli vogliono bene.",
-    "I corvi hanno una intelligenza paragonabile a quella dei primati.",
-    "I corvi si ricordano chi li ha trattati male e si vendicano.",
-    "I corvi usano automobili per schiacciare le noci.",
-    "I corvi comunicano con oltre 250 vocalizzi diversi.",
+    "🧠 IQ stimato: più alto del tuo vicino di casa.",
+    "👁️ Ti sta guardando. Ti ha già catalogato. Sa dove abiti.",
+    "🎁 Porta doni alle persone che gli piacciono. Tu non hai ancora ricevuto niente.",
+    "🚗 Usa le macchine per schiacciare le noci. Fondamentalmente guida meglio di molti.",
+    "🗣️ Può imitare la voce umana. Probabilmente lo sta già facendo.",
+    "☃️ Gioca nella neve per puro divertimento. Ha più work-life balance di te.",
+    "💀 Un gruppo di corvi si chiama 'omicidio'. Nomen omen.",
+    "🧳 Se lo tratti male, se lo ricorda. Per anni. Pianifica la vendetta con calma.",
+    "🔧 Usa strumenti, risolve puzzle, apre contenitori. Candidato ideale per molti lavori.",
+    "📡 Comunica con oltre 250 vocalizzi. Più di quanto tu faccia con i tuoi coinquilini.",
+    "👶 Riconosce i volti umani meglio di alcuni sistemi di sorveglianza.",
+    "🏆 Ha superato i test cognitivi progettati per i bambini di 7 anni. In meno tempo.",
 ]
 
 # ============================================================
@@ -204,6 +206,32 @@ def registra_nuovi_utenti():
         pass
 
 
+def aggiungi_a_compilazione(percorso_video):
+    """Appende il video alla compilazione giornaliera."""
+    oggi = time.strftime("%Y%m%d")
+    compilazione = os.path.join(CARTELLA_VIDEO, f"compilazione_{oggi}.mp4")
+    lista_file   = os.path.join(CARTELLA_VIDEO, f"lista_{oggi}.txt")
+
+    # Aggiunge il video alla lista
+    with open(lista_file, 'a') as f:
+        f.write(f"file '{percorso_video}'\n")
+
+    # Ricrea la compilazione con tutti i video del giorno
+    print("[COMPILAZIONE] Aggiorno compilazione giornaliera...")
+    try:
+        subprocess.run([
+            "ffmpeg", "-f", "concat", "-safe", "0",
+            "-i", lista_file,
+            "-c", "copy", "-y", compilazione
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        if os.path.exists(compilazione):
+            mb = os.path.getsize(compilazione) / 1024 / 1024
+            n  = open(lista_file).read().count("file '")
+            print(f"[COMPILAZIONE] {n} video → {mb:.1f}MB → {compilazione}")
+    except Exception as e:
+        print(f"[COMPILAZIONE] Errore: {e}")
+
+
 def comprimi_video(percorso_originale):
     base, ext = os.path.splitext(percorso_originale)
     out = base + "_tg" + ext
@@ -239,12 +267,17 @@ def invia_video_telegram(percorso_video, secondi_visibile, timestamp_inizio):
     mb        = os.path.getsize(percorso_da_inviare) / 1024 / 1024
     fatto      = random.choice(FRASI_CORVI)
 
+    emoji_numero = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    em = emoji_numero[min(n_oggi - 1, 9)] if n_oggi >= 1 else "🐦‍⬛"
+
     didascalia = (
-        f"Corvo avvistato!\n"
-        f"Ore {ora} — visibile per {secondi_visibile:.0f} secondi\n"
-        f"Avvistamento #{n_oggi} di oggi\n"
+        f"🐦‍⬛ CORVO AVVISTATO 🐦‍⬛\n"
         f"\n"
-        f"Lo sapevi? {fatto}"
+        f"🕐 Ore {ora}\n"
+        f"⏱️ Visibile per {secondi_visibile:.0f} secondi\n"
+        f"{em} Avvistamento numero {n_oggi} di oggi\n"
+        f"\n"
+        f"{fatto}"
     )
 
     try:
@@ -387,6 +420,8 @@ def main():
                                 timestamp_inizio_av, timestamp_fine,
                                 secondi_corvo_totali, nome_file_video
                             )
+                            # Aggiunge alla compilazione giornaliera
+                            aggiungi_a_compilazione(nome_file_video)
                             # Inviamo su Telegram in background
                             _ts = timestamp_inizio_av
                             _nf = nome_file_video
@@ -418,6 +453,7 @@ def main():
             if secondi_corvo_totali >= SECONDI_MINIMI_CORVO:
                 ts_fine = time.strftime("%Y-%m-%d %H:%M:%S")
                 salva_avvistamento(timestamp_inizio_av, ts_fine, secondi_corvo_totali, nome_file_video)
+                aggiungi_a_compilazione(nome_file_video)
                 print(f"[SALVATO] {nome_file_video}")
                 invia_video_telegram(nome_file_video, secondi_corvo_totali, timestamp_inizio_av)
             else:

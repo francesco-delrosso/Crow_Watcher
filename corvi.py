@@ -13,6 +13,7 @@ import random
 import requests
 import subprocess
 import threading
+import queue
 from config import TELEGRAM_TOKEN
 
 # ============================================================
@@ -159,6 +160,38 @@ FRASI_CORVI = [
     "🥷 Silenzioso quando vuole. Quando lo senti è perché ha deciso di farti sapere che c'è.",
     "🌊 Ha attraversato oceani in migrazioni da 3.000 km. Il viaggio in ritardo alla stazione ti sembra ancora un problema?",
 ]
+
+# ============================================================
+# AI THREAD
+# ============================================================
+
+# Coda con maxsize=1: tiene solo l'ultimo frame, l'AI non accumula lavoro arretrato
+_coda_ai     = queue.Queue(maxsize=1)
+_uccelli_ai  = []
+_lock_ai     = threading.Lock()
+
+def _ai_worker(rete_ai, larghezza, altezza):
+    global _uccelli_ai
+    while True:
+        try:
+            frame = _coda_ai.get(timeout=1)
+            risultato = trova_uccelli(rete_ai, frame, larghezza, altezza)
+            with _lock_ai:
+                _uccelli_ai = risultato
+        except queue.Empty:
+            continue
+
+def leggi_uccelli_ai():
+    with _lock_ai:
+        return list(_uccelli_ai)
+
+def invia_frame_ad_ai(frame):
+    """Manda il frame all'AI senza bloccare. Se l'AI è occupata, scarta."""
+    try:
+        _coda_ai.put_nowait(frame.copy())
+    except queue.Full:
+        pass  # AI ancora occupata sul frame precedente, nessun problema
+
 
 # ============================================================
 # DATABASE
@@ -454,14 +487,21 @@ def main():
     fps       = int(fotocamera.get(cv2.CAP_PROP_FPS)) or FPS_SALVATAGGIO
     print(f"Fotocamera: {larghezza}x{altezza} @ {fps}fps")
 
+    # Avvia il thread AI: gira in parallelo, non blocca mai il loop principale
+    threading.Thread(
+        target=_ai_worker,
+        args=(rete_ai, larghezza, altezza),
+        daemon=True
+    ).start()
+    print("[AI] Thread avviato")
+
     # --- Stato ---
     sta_registrando      = False
     scrittore_video      = None
     tempo_ultimo_corvo   = None
     nome_file_video      = None
-    timestamp_inizio_av  = None   # timestamp inizio avvistamento per il DB
+    timestamp_inizio_av  = None
     contatore_frame      = 0
-    uccelli_correnti     = []
     secondi_corvo_totali = 0.0
     ultimo_tick_corvo    = None
     ultimo_check_utenti  = 0
@@ -480,9 +520,12 @@ def main():
             contatore_frame += 1
             momento_attuale  = time.time()
 
-            # Analisi AI ogni N frame
+            # Ogni N frame manda il frame all'AI (non-bloccante)
             if contatore_frame % ANALIZZA_OGNI_N_FRAME == 0:
-                uccelli_correnti = trova_uccelli(rete_ai, frame, larghezza, altezza)
+                invia_frame_ad_ai(frame)
+
+            # Legge il risultato più recente dell'AI (mai bloccante)
+            uccelli_correnti = leggi_uccelli_ai()
 
             # Check nuovi utenti ogni 30 secondi
             if momento_attuale - ultimo_check_utenti >= 30:

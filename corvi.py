@@ -534,6 +534,10 @@ def main():
 
             corvo_visibile = len(uccelli_correnti) > 0
 
+            # Scrivi il frame ogni volta che la registrazione è attiva
+            if sta_registrando and scrittore_video is not None:
+                scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
+
             if corvo_visibile:
                 tempo_ultimo_corvo = momento_attuale
                 if ultimo_tick_corvo is not None:
@@ -551,7 +555,6 @@ def main():
                     sta_registrando = True
                     print(f"\n[REC] Inizio → {nome_file_video}")
 
-                scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
                 print(f"[REC] {len(uccelli_correnti)} corvo/i | {secondi_corvo_totali:.0f}s   ", end='\r')
 
             else:
@@ -559,10 +562,6 @@ def main():
 
                 if sta_registrando and tempo_ultimo_corvo is not None:
                     secondi_assenza = momento_attuale - tempo_ultimo_corvo
-
-                    # Buffer di fine: scrivi ancora qualche secondo dopo che il corvo sparisce
-                    if secondi_assenza < SECONDI_BUFFER_FINE:
-                        scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
 
                     secondi_rimasti = SECONDI_SENZA_CORVO - secondi_assenza
                     if secondi_rimasti > 0:

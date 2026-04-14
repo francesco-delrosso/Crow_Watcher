@@ -1,14 +1,15 @@
 import os
 import sys
 
-# Silenziamo stderr a livello di sistema operativo PRIMA di tutto
-# Questo elimina gli errori "Expected boundary" di ffmpeg
+# Silenziamo stderr prima di tutto per eliminare gli errori ffmpeg
 devnull = open(os.devnull, 'w')
 os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 import cv2
 import numpy as np
 import time
+import sqlite3
+import random
 import requests
 import subprocess
 import threading
@@ -18,32 +19,88 @@ from config import TELEGRAM_TOKEN
 # IMPOSTAZIONI
 # ============================================================
 
-SECONDI_SENZA_CORVO   = 30
-CARTELLA_VIDEO        = "/sdcard/rilevatore_corvi/"
-MODELLO_AI            = "/sdcard/rilevatore_corvi/yolov8n.onnx"
-SOGLIA_CONFIDENZA     = 0.15   # abbassata per non perdere rilevamenti
-CLASSE_UCCELLO        = 14
-DIMENSIONE_MODELLO    = 640
-ANALIZZA_OGNI_N_FRAME = 10     # AI ogni 10 frame — buon compromesso
-SECONDI_MINIMI_CORVO  = 5
+SECONDI_SENZA_CORVO     = 30
+CARTELLA_VIDEO          = "/sdcard/rilevatore_corvi/"
+MODELLO_AI              = "/sdcard/rilevatore_corvi/yolov8n.onnx"
+DATABASE                = "/sdcard/rilevatore_corvi/corvi.db"
+SOGLIA_CONFIDENZA       = 0.15
+CLASSE_UCCELLO          = 14
+DIMENSIONE_MODELLO      = 640
+ANALIZZA_OGNI_N_FRAME   = 10
+SECONDI_MINIMI_CORVO    = 5
 RISOLUZIONE_SALVATAGGIO = (1280, 720)
-FPS_SALVATAGGIO       = 30
-RISOLUZIONE_TELEGRAM  = (854, 480)
-FPS_TELEGRAM          = 30
-TELEGRAM_CANALE       = "@crowwatcher"
-FILE_UTENTI           = "/sdcard/rilevatore_corvi/utenti.txt"
-FILE_OFFSET           = "/sdcard/rilevatore_corvi/telegram_offset.txt"
-DEBUG_AI              = True   # stampa cosa vede l'AI — metti False quando funziona
+FPS_SALVATAGGIO         = 30
+RISOLUZIONE_TELEGRAM    = (854, 480)
+FPS_TELEGRAM            = 30
+TELEGRAM_CANALE         = "@crowwatcher"
+FILE_UTENTI             = "/sdcard/rilevatore_corvi/utenti.txt"
+FILE_OFFSET             = "/sdcard/rilevatore_corvi/telegram_offset.txt"
+DEBUG_AI                = True
+
+# Frasi casuali sui corvi per il messaggio Telegram
+FRASI_CORVI = [
+    "I corvi ricordano i volti umani per anni.",
+    "I corvi usano strumenti per risolvere problemi complessi.",
+    "Un gruppo di corvi si chiama 'omicidio' (murder of crows).",
+    "I corvi possono imitare la voce umana.",
+    "I corvi giocano nella neve solo per divertimento.",
+    "I corvi portano doni alle persone che gli vogliono bene.",
+    "I corvi hanno una intelligenza paragonabile a quella dei primati.",
+    "I corvi si ricordano chi li ha trattati male e si vendicano.",
+    "I corvi usano automobili per schiacciare le noci.",
+    "I corvi comunicano con oltre 250 vocalizzi diversi.",
+]
 
 # ============================================================
-# FUNZIONI DI SUPPORTO
+# DATABASE
 # ============================================================
 
-def crea_cartella_output():
-    if not os.path.exists(CARTELLA_VIDEO):
-        os.makedirs(CARTELLA_VIDEO)
-        print(f"Cartella creata: {CARTELLA_VIDEO}")
+def inizializza_db():
+    conn = sqlite3.connect(DATABASE)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS avvistamenti (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp_inizio TEXT NOT NULL,
+            timestamp_fine   TEXT,
+            durata_secondi   REAL,
+            nome_video       TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+
+def salva_avvistamento(timestamp_inizio, timestamp_fine, durata, nome_video):
+    try:
+        conn = sqlite3.connect(DATABASE)
+        conn.execute(
+            "INSERT INTO avvistamenti (timestamp_inizio, timestamp_fine, durata_secondi, nome_video) VALUES (?,?,?,?)",
+            (timestamp_inizio, timestamp_fine, durata, nome_video)
+        )
+        conn.commit()
+        conn.close()
+        print(f"[DB] Avvistamento salvato: {durata:.0f}s")
+    except Exception as e:
+        print(f"[DB] Errore: {e}")
+
+
+def conta_avvistamenti_oggi():
+    try:
+        oggi = time.strftime("%Y-%m-%d")
+        conn = sqlite3.connect(DATABASE)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM avvistamenti WHERE timestamp_inizio LIKE ?",
+            (f"{oggi}%",)
+        ).fetchone()[0]
+        conn.close()
+        return n
+    except Exception:
+        return 0
+
+
+# ============================================================
+# AI
+# ============================================================
 
 def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
     blob = cv2.dnn.blobFromImage(
@@ -55,8 +112,7 @@ def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
         crop=False
     )
     rete_ai.setInput(blob)
-    output = rete_ai.forward()
-    predizioni = np.squeeze(output).T
+    predizioni = np.squeeze(rete_ai.forward()).T
 
     scala_x = larghezza_frame / DIMENSIONE_MODELLO
     scala_y = altezza_frame / DIMENSIONE_MODELLO
@@ -81,13 +137,17 @@ def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
             })
 
     if DEBUG_AI and miglior[0] > 0.05:
-        nomi = {0:'persona',14:'uccello',15:'gatto',16:'cane',2:'auto',63:'laptop'}
+        nomi = {0:'persona', 14:'uccello', 15:'gatto', 16:'cane', 2:'auto'}
         nome = nomi.get(miglior[1], f'classe_{miglior[1]}')
         tag  = " <<< UCCELLO!" if miglior[1] == CLASSE_UCCELLO else ""
         print(f"[AI] {nome} {miglior[0]*100:.1f}%{tag}   ", end='\r')
 
     return uccelli_trovati
 
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 def leggi_utenti():
     if not os.path.exists(FILE_UTENTI):
@@ -104,8 +164,10 @@ def registra_nuovi_utenti():
             if c:
                 offset = int(c)
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-        r = requests.get(url, params={'offset': offset, 'timeout': 2}, timeout=5)
+        r = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+            params={'offset': offset, 'timeout': 2}, timeout=5
+        )
         if r.status_code != 200:
             return
         aggiornamenti = r.json().get('result', [])
@@ -117,8 +179,7 @@ def registra_nuovi_utenti():
             nuovo_offset = a['update_id'] + 1
             if nuovo_offset > offset:
                 offset = nuovo_offset
-            msg     = a.get('message', {})
-            chat_id = str(msg.get('chat', {}).get('id', ''))
+            chat_id = str(a.get('message', {}).get('chat', {}).get('id', ''))
             if chat_id and chat_id not in esistenti:
                 esistenti.add(chat_id)
                 nuovi.append(chat_id)
@@ -140,7 +201,7 @@ def registra_nuovi_utenti():
 
 def comprimi_video(percorso_originale):
     base, ext = os.path.splitext(percorso_originale)
-    percorso_compresso = base + "_tg" + ext
+    out = base + "_tg" + ext
     lw, lh = RISOLUZIONE_TELEGRAM
     print("[FFMPEG] Compressione...")
     try:
@@ -149,25 +210,38 @@ def comprimi_video(percorso_originale):
             "-vf", f"scale={lw}:{lh}",
             "-c:v", "libx264", "-crf", "18",
             "-preset", "fast", "-r", str(FPS_TELEGRAM),
-            "-an", "-y", percorso_compresso
+            "-an", "-y", out
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
-        if os.path.exists(percorso_compresso):
-            mb_orig = os.path.getsize(percorso_originale) / 1024 / 1024
-            mb_comp = os.path.getsize(percorso_compresso) / 1024 / 1024
-            print(f"[FFMPEG] {mb_orig:.1f}MB → {mb_comp:.1f}MB")
-            return percorso_compresso
+        if os.path.exists(out):
+            mb1 = os.path.getsize(percorso_originale) / 1024 / 1024
+            mb2 = os.path.getsize(out) / 1024 / 1024
+            print(f"[FFMPEG] {mb1:.1f}MB → {mb2:.1f}MB")
+            return out
     except Exception as e:
         print(f"[FFMPEG] Errore: {e}")
     return percorso_originale
 
 
-def invia_video_telegram(percorso_video, secondi_visibile):
+def invia_video_telegram(percorso_video, secondi_visibile, timestamp_inizio):
     percorso_da_inviare = comprimi_video(percorso_video)
     utenti      = leggi_utenti()
     destinatari = [TELEGRAM_CANALE] + utenti
     print(f"[TELEGRAM] Invio a {len(destinatari)} destinatari...")
-    mb = os.path.getsize(percorso_da_inviare) / 1024 / 1024
-    didascalia = f"Corvo rilevato!\nVisibile: {secondi_visibile:.0f}s\nDim: {mb:.1f}MB"
+
+    # Costruiamo il messaggio divertente
+    n_oggi    = conta_avvistamenti_oggi()
+    ora       = time.strftime("%H:%M", time.localtime())
+    mb        = os.path.getsize(percorso_da_inviare) / 1024 / 1024
+    fatto      = random.choice(FRASI_CORVI)
+
+    didascalia = (
+        f"Corvo avvistato!\n"
+        f"Ore {ora} — visibile per {secondi_visibile:.0f} secondi\n"
+        f"Avvistamento #{n_oggi} di oggi\n"
+        f"\n"
+        f"Lo sapevi? {fatto}"
+    )
+
     try:
         with open(percorso_da_inviare, 'rb') as f:
             contenuto = f.read()
@@ -201,7 +275,11 @@ def main():
     print("   RILEVATORE DI CORVI")
     print("=" * 55)
 
-    crea_cartella_output()
+    if not os.path.exists(CARTELLA_VIDEO):
+        os.makedirs(CARTELLA_VIDEO)
+
+    inizializza_db()
+    print("[DB] Database pronto")
 
     if not os.path.exists(MODELLO_AI):
         print(f"ERRORE: modello non trovato in {MODELLO_AI}")
@@ -213,22 +291,21 @@ def main():
 
     print("Connessione fotocamera...")
     fotocamera = cv2.VideoCapture("http://127.0.0.1:8080/video")
-
     if not fotocamera.isOpened():
-        print("ERRORE: IP Webcam non raggiungibile. Avvia il server nell'app.")
+        print("ERRORE: IP Webcam non raggiungibile.")
         return
 
     larghezza = int(fotocamera.get(cv2.CAP_PROP_FRAME_WIDTH))
     altezza   = int(fotocamera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps       = int(fotocamera.get(cv2.CAP_PROP_FPS))
-    if fps <= 0:
-        fps = FPS_SALVATAGGIO
+    fps       = int(fotocamera.get(cv2.CAP_PROP_FPS)) or FPS_SALVATAGGIO
     print(f"Fotocamera: {larghezza}x{altezza} @ {fps}fps")
 
+    # --- Stato ---
     sta_registrando      = False
     scrittore_video      = None
     tempo_ultimo_corvo   = None
     nome_file_video      = None
+    timestamp_inizio_av  = None   # timestamp inizio avvistamento per il DB
     contatore_frame      = 0
     uccelli_correnti     = []
     secondi_corvo_totali = 0.0
@@ -253,7 +330,7 @@ def main():
             if contatore_frame % ANALIZZA_OGNI_N_FRAME == 0:
                 uccelli_correnti = trova_uccelli(rete_ai, frame, larghezza, altezza)
 
-            # Check nuovi utenti Telegram ogni 30 secondi
+            # Check nuovi utenti ogni 30 secondi
             if momento_attuale - ultimo_check_utenti >= 30:
                 threading.Thread(target=registra_nuovi_utenti, daemon=True).start()
                 ultimo_check_utenti = momento_attuale
@@ -268,6 +345,7 @@ def main():
 
                 if not sta_registrando:
                     ts = time.strftime("%Y%m%d_%H%M%S")
+                    timestamp_inizio_av = time.strftime("%Y-%m-%d %H:%M:%S")
                     nome_file_video = os.path.join(CARTELLA_VIDEO, f"corvo_{ts}.mp4")
                     codec = cv2.VideoWriter_fourcc(*'mp4v')
                     scrittore_video = cv2.VideoWriter(
@@ -276,40 +354,55 @@ def main():
                     sta_registrando = True
                     print(f"\n[REC] Inizio → {nome_file_video}")
 
+                # Scriviamo il frame SOLO quando il corvo è visibile
+                # Questo elimina i momenti morti dal video
+                scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
+                print(f"[REC] {len(uccelli_correnti)} corvo/i | {secondi_corvo_totali:.0f}s   ", end='\r')
+
             else:
                 ultimo_tick_corvo = None
+
                 if sta_registrando and tempo_ultimo_corvo is not None:
                     secondi_assenza = momento_attuale - tempo_ultimo_corvo
                     secondi_rimasti = SECONDI_SENZA_CORVO - secondi_assenza
                     if secondi_rimasti > 0:
-                        print(f"[TIMER] Stop tra {int(secondi_rimasti)}s | visibile {secondi_corvo_totali:.0f}s   ", end='\r')
+                        print(f"[TIMER] Stop tra {int(secondi_rimasti)}s | totale {secondi_corvo_totali:.0f}s   ", end='\r')
 
                     if secondi_assenza >= SECONDI_SENZA_CORVO:
                         scrittore_video.release()
                         scrittore_video = None
                         sta_registrando = False
+
+                        timestamp_fine = time.strftime("%Y-%m-%d %H:%M:%S")
+
                         if secondi_corvo_totali >= SECONDI_MINIMI_CORVO:
                             print(f"\n[SALVATO] {secondi_corvo_totali:.0f}s → {nome_file_video}")
+                            # Salviamo nel DB
+                            salva_avvistamento(
+                                timestamp_inizio_av, timestamp_fine,
+                                secondi_corvo_totali, nome_file_video
+                            )
+                            # Inviamo su Telegram in background
+                            _ts = timestamp_inizio_av
+                            _nf = nome_file_video
+                            _s  = secondi_corvo_totali
                             threading.Thread(
                                 target=invia_video_telegram,
-                                args=(nome_file_video, secondi_corvo_totali),
+                                args=(_nf, _s, _ts),
                                 daemon=True
                             ).start()
                         else:
                             os.remove(nome_file_video)
-                            print(f"\n[SCARTATO] solo {secondi_corvo_totali:.0f}s")
+                            print(f"\n[SCARTATO] solo {secondi_corvo_totali:.0f}s di corvo")
+
                         nome_file_video      = None
                         tempo_ultimo_corvo   = None
                         uccelli_correnti     = []
                         secondi_corvo_totali = 0.0
+                        timestamp_inizio_av  = None
 
-            if sta_registrando and scrittore_video is not None:
-                scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
-
-            if corvo_visibile and sta_registrando:
-                print(f"[REC] {len(uccelli_correnti)} uccello/i | {secondi_corvo_totali:.0f}s totali   ", end='\r')
-            elif not corvo_visibile and not sta_registrando:
-                print("[IN ASCOLTO]   ", end='\r')
+                elif not sta_registrando:
+                    print("[IN ASCOLTO]   ", end='\r')
 
     except KeyboardInterrupt:
         print("\n\nChiusura...")
@@ -318,8 +411,10 @@ def main():
         if scrittore_video is not None:
             scrittore_video.release()
             if secondi_corvo_totali >= SECONDI_MINIMI_CORVO:
+                ts_fine = time.strftime("%Y-%m-%d %H:%M:%S")
+                salva_avvistamento(timestamp_inizio_av, ts_fine, secondi_corvo_totali, nome_file_video)
                 print(f"[SALVATO] {nome_file_video}")
-                invia_video_telegram(nome_file_video, secondi_corvo_totali)
+                invia_video_telegram(nome_file_video, secondi_corvo_totali, timestamp_inizio_av)
             else:
                 os.remove(nome_file_video)
         fotocamera.release()

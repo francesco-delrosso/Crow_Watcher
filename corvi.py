@@ -23,9 +23,10 @@ SECONDI_SENZA_CORVO     = 30
 CARTELLA_VIDEO          = "/sdcard/rilevatore_corvi/"
 MODELLO_AI              = "/sdcard/rilevatore_corvi/yolov8n.onnx"
 DATABASE                = "/sdcard/rilevatore_corvi/corvi.db"
-SOGLIA_CONFIDENZA       = 0.15
+SOGLIA_CONFIDENZA       = 0.25
 CLASSE_UCCELLO          = 14
 DIMENSIONE_MODELLO      = 640
+ZONA_RILEVAMENTO        = 0.70   # analizza solo il top X% del frame (es. 0.70 = ignora il 30% in basso)
 ANALIZZA_OGNI_N_FRAME   = 10
 SECONDI_MINIMI_CORVO    = 5
 RISOLUZIONE_SALVATAGGIO = (1280, 720)
@@ -103,8 +104,12 @@ def conta_avvistamenti_oggi():
 # ============================================================
 
 def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
+    # Ritaglia la parte bassa del frame (strada) prima di analizzare
+    righe_analisi = int(altezza_frame * ZONA_RILEVAMENTO)
+    frame_analisi = frame[:righe_analisi, :]
+
     blob = cv2.dnn.blobFromImage(
-        frame,
+        frame_analisi,
         scalefactor=1.0 / 255.0,
         size=(DIMENSIONE_MODELLO, DIMENSIONE_MODELLO),
         mean=(0, 0, 0),

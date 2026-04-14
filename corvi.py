@@ -232,6 +232,16 @@ def aggiungi_a_compilazione(percorso_video):
         print(f"[COMPILAZIONE] Errore: {e}")
 
 
+def invia_e_elimina_clip(percorso_video, secondi, ts):
+    """Invia la clip su Telegram, poi la elimina dal tablet."""
+    invia_video_telegram(percorso_video, secondi, ts)
+    try:
+        os.remove(percorso_video)
+        print(f"[CLIP] Eliminata dal tablet: {os.path.basename(percorso_video)}")
+    except Exception as e:
+        print(f"[CLIP] Errore eliminazione: {e}")
+
+
 def comprimi_video(percorso_originale):
     base, ext = os.path.splitext(percorso_originale)
     out = base + "_tg" + ext
@@ -420,14 +430,14 @@ def main():
                                 timestamp_inizio_av, timestamp_fine,
                                 secondi_corvo_totali, nome_file_video
                             )
-                            # Aggiunge alla compilazione giornaliera
+                            # Aggiunge alla compilazione giornaliera (sincrono, deve finire prima di eliminare)
                             aggiungi_a_compilazione(nome_file_video)
-                            # Inviamo su Telegram in background
+                            # Invia su Telegram e poi elimina la clip dal tablet
                             _ts = timestamp_inizio_av
                             _nf = nome_file_video
                             _s  = secondi_corvo_totali
                             threading.Thread(
-                                target=invia_video_telegram,
+                                target=invia_e_elimina_clip,
                                 args=(_nf, _s, _ts),
                                 daemon=True
                             ).start()
@@ -455,7 +465,7 @@ def main():
                 salva_avvistamento(timestamp_inizio_av, ts_fine, secondi_corvo_totali, nome_file_video)
                 aggiungi_a_compilazione(nome_file_video)
                 print(f"[SALVATO] {nome_file_video}")
-                invia_video_telegram(nome_file_video, secondi_corvo_totali, timestamp_inizio_av)
+                invia_e_elimina_clip(nome_file_video, secondi_corvo_totali, timestamp_inizio_av)
             else:
                 os.remove(nome_file_video)
         fotocamera.release()

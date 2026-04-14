@@ -162,6 +162,28 @@ FRASI_CORVI = [
 ]
 
 # ============================================================
+# CAMERA THREAD
+# ============================================================
+
+_camera_frame = None
+_camera_lock  = threading.Lock()
+_camera_attiva = True
+
+def _camera_worker(fotocamera):
+    """Legge frame dalla camera in continuo, senza bloccare il loop principale."""
+    global _camera_frame
+    while _camera_attiva:
+        ok, frame = fotocamera.read()
+        if ok and frame is not None:
+            with _camera_lock:
+                _camera_frame = frame
+
+def leggi_frame():
+    with _camera_lock:
+        return _camera_frame
+
+
+# ============================================================
 # AI THREAD
 # ============================================================
 
@@ -186,11 +208,10 @@ def leggi_uccelli_ai():
         return list(_uccelli_ai)
 
 def invia_frame_ad_ai(frame):
-    """Manda il frame all'AI senza bloccare. Se l'AI è occupata, scarta."""
     try:
         _coda_ai.put_nowait(frame.copy())
     except queue.Full:
-        pass  # AI ancora occupata sul frame precedente, nessun problema
+        pass
 
 
 # ============================================================
@@ -484,15 +505,18 @@ def main():
 
     larghezza = int(fotocamera.get(cv2.CAP_PROP_FRAME_WIDTH))
     altezza   = int(fotocamera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps       = int(fotocamera.get(cv2.CAP_PROP_FPS)) or FPS_SALVATAGGIO
-    print(f"Fotocamera: {larghezza}x{altezza} @ {fps}fps")
+    print(f"Fotocamera: {larghezza}x{altezza}")
 
-    # Avvia il thread AI: gira in parallelo, non blocca mai il loop principale
-    threading.Thread(
-        target=_ai_worker,
-        args=(rete_ai, larghezza, altezza),
-        daemon=True
-    ).start()
+    # Thread camera: legge frame in continuo senza bloccare il loop
+    threading.Thread(target=_camera_worker, args=(fotocamera,), daemon=True).start()
+    print("[CAM] Thread avviato")
+
+    # Aspetta il primo frame
+    while leggi_frame() is None:
+        time.sleep(0.05)
+
+    # Avvia il thread AI
+    threading.Thread(target=_ai_worker, args=(rete_ai, larghezza, altezza), daemon=True).start()
     print("[AI] Thread avviato")
 
     # --- Stato ---
@@ -510,11 +534,21 @@ def main():
     print("  ATTIVO — CTRL+C per uscire")
     print("=" * 55 + "\n")
 
+    intervallo_frame = 1.0 / FPS_SALVATAGGIO
+    prossimo_tick    = time.time()
+
     try:
         while True:
-            ok, frame = fotocamera.read()
-            if not ok or frame is None:
-                time.sleep(0.05)
+            # Ritmo fisso: scrivi esattamente FPS_SALVATAGGIO frame al secondo
+            ora = time.time()
+            attesa = prossimo_tick - ora
+            if attesa > 0:
+                time.sleep(attesa)
+            prossimo_tick += intervallo_frame
+
+            # Prende l'ultimo frame disponibile (mai bloccante)
+            frame = leggi_frame()
+            if frame is None:
                 continue
 
             contatore_frame += 1
@@ -619,6 +653,8 @@ def main():
                 invia_e_elimina_clip(nome_file_video, secondi_corvo_totali, timestamp_inizio_av)
             else:
                 os.remove(nome_file_video)
+        global _camera_attiva
+        _camera_attiva = False
         fotocamera.release()
         print("Terminato.")
 

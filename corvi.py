@@ -411,7 +411,8 @@ def comprimi_video(percorso_originale):
     mb1 = os.path.getsize(percorso_originale) / 1024 / 1024
 
     # Prova CRF crescente finché il file sta sotto il limite Telegram
-    for crf in [18, 23, 28, 35, 40]:
+    # Partiamo da CRF 20 perché la sorgente è già H.264 (minor degrado rispetto a mp4v)
+    for crf in [20, 25, 30, 35, 40]:
         print(f"[FFMPEG] CRF {crf}...")
         try:
             subprocess.run([
@@ -585,7 +586,11 @@ def main():
 
             # Scrivi il frame ogni volta che la registrazione è attiva
             if sta_registrando and scrittore_video is not None:
-                scrittore_video.write(cv2.resize(frame, RISOLUZIONE_SALVATAGGIO))
+                frame_rid = cv2.resize(frame, RISOLUZIONE_SALVATAGGIO)
+                try:
+                    scrittore_video.stdin.write(frame_rid.tobytes())
+                except Exception:
+                    pass
 
             if corvo_visibile:
                 tempo_ultimo_corvo = momento_attuale
@@ -597,10 +602,18 @@ def main():
                     ts = time.strftime("%Y%m%d_%H%M%S")
                     timestamp_inizio_av = time.strftime("%Y-%m-%d %H:%M:%S")
                     nome_file_video = os.path.join(CARTELLA_VIDEO, f"corvo_{ts}.mp4")
-                    codec = cv2.VideoWriter_fourcc(*'mp4v')
-                    scrittore_video = cv2.VideoWriter(
-                        nome_file_video, codec, FPS_SALVATAGGIO, RISOLUZIONE_SALVATAGGIO
-                    )
+                    lw, lh = RISOLUZIONE_SALVATAGGIO
+                    scrittore_video = subprocess.Popen([
+                        "ffmpeg", "-y",
+                        "-f", "rawvideo", "-vcodec", "rawvideo",
+                        "-s", f"{lw}x{lh}",
+                        "-pix_fmt", "bgr24",
+                        "-r", str(FPS_SALVATAGGIO),
+                        "-i", "pipe:0",
+                        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                        "-pix_fmt", "yuv420p",
+                        nome_file_video
+                    ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     sta_registrando = True
                     print(f"\n[REC] Inizio → {nome_file_video}")
 
@@ -617,7 +630,8 @@ def main():
                         print(f"[TIMER] Stop tra {int(secondi_rimasti)}s | totale {secondi_corvo_totali:.0f}s   ", end='\r')
 
                     if secondi_assenza >= SECONDI_SENZA_CORVO:
-                        scrittore_video.release()
+                        scrittore_video.stdin.close()
+                        scrittore_video.wait()
                         scrittore_video = None
                         sta_registrando = False
 
@@ -659,7 +673,8 @@ def main():
 
     finally:
         if scrittore_video is not None:
-            scrittore_video.release()
+            scrittore_video.stdin.close()
+            scrittore_video.wait()
             if secondi_corvo_totali >= SECONDI_MINIMI_CORVO:
                 ts_fine = time.strftime("%Y-%m-%d %H:%M:%S")
                 salva_avvistamento(timestamp_inizio_av, ts_fine, secondi_corvo_totali, nome_file_video)

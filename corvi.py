@@ -402,27 +402,37 @@ def invia_e_elimina_clip(percorso_video, secondi, ts):
         print(f"[CLIP] Errore eliminazione: {e}")
 
 
+LIMITE_TELEGRAM_MB = 49
+
 def comprimi_video(percorso_originale):
     base, ext = os.path.splitext(percorso_originale)
     out = base + "_tg" + ext
-    lw, lh = RISOLUZIONE_TELEGRAM
-    print("[FFMPEG] Compressione...")
-    try:
-        subprocess.run([
-            "ffmpeg", "-i", percorso_originale,
-            "-vf", f"scale={lw}:-2",   # -2 = mantieni aspect ratio, no stretch
-            "-c:v", "libx264", "-crf", "18",
-            "-preset", "fast", "-r", str(FPS_TELEGRAM),
-            "-an", "-y", out
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+    lw = RISOLUZIONE_TELEGRAM[0]
+    mb1 = os.path.getsize(percorso_originale) / 1024 / 1024
+
+    # Prova CRF crescente finché il file sta sotto il limite Telegram
+    for crf in [18, 23, 28, 35, 40]:
+        print(f"[FFMPEG] CRF {crf}...")
+        try:
+            subprocess.run([
+                "ffmpeg", "-i", percorso_originale,
+                "-vf", f"scale={lw}:-2",
+                "-c:v", "libx264", "-crf", str(crf),
+                "-preset", "fast", "-r", str(FPS_TELEGRAM),
+                "-an", "-y", out
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        except Exception as e:
+            print(f"[FFMPEG] Errore: {e}")
+            return percorso_originale
+
         if os.path.exists(out):
-            mb1 = os.path.getsize(percorso_originale) / 1024 / 1024
             mb2 = os.path.getsize(out) / 1024 / 1024
-            print(f"[FFMPEG] {mb1:.1f}MB → {mb2:.1f}MB")
-            return out
-    except Exception as e:
-        print(f"[FFMPEG] Errore: {e}")
-    return percorso_originale
+            print(f"[FFMPEG] {mb1:.1f}MB → {mb2:.1f}MB (CRF {crf})")
+            if mb2 <= LIMITE_TELEGRAM_MB:
+                return out
+
+    print(f"[FFMPEG] Impossibile scendere sotto {LIMITE_TELEGRAM_MB}MB, invio comunque")
+    return out
 
 
 def invia_video_telegram(percorso_video, secondi_visibile, timestamp_inizio):

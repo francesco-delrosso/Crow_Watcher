@@ -498,7 +498,7 @@ def main():
     print("Modello caricato!")
 
     print("Connessione fotocamera...")
-    fotocamera = cv2.VideoCapture("http://127.0.0.1:8081/video")
+    fotocamera = cv2.VideoCapture("http://192.168.1.56:8081/video")
     if not fotocamera.isOpened():
         print("ERRORE: IP Webcam non raggiungibile.")
         return

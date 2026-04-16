@@ -306,11 +306,24 @@ def trova_uccelli(rete_ai, frame):
                 'confidenza': conf
             })
 
-    if DEBUG_AI and miglior[0] > 0.05:
-        nomi = {0:'persona', 14:'uccello', 15:'gatto', 16:'cane', 2:'auto'}
-        nome = nomi.get(miglior[1], f'classe_{miglior[1]}')
-        tag  = " <<< UCCELLO!" if miglior[1] == CLASSE_UCCELLO else ""
-        print(f"[AI] {nome} {miglior[0]*100:.1f}%{tag}   ", end='\r')
+    if DEBUG_AI:
+        nomi = {0:'persona', 1:'bici', 2:'auto', 14:'uccello', 15:'gatto', 16:'cane', 47:'bicchiere', 63:'laptop', 67:'telefono'}
+        # Top 3 classi per capire cosa vede l'AI
+        tutti = []
+        for r in predizioni:
+            ps = r[4:]
+            c  = int(np.argmax(ps))
+            v  = float(ps[c])
+            if v > 0.10:
+                tutti.append((v, c))
+        tutti.sort(reverse=True)
+        top3 = tutti[:3]
+        parti = []
+        for v, c in top3:
+            n = nomi.get(c, f'cls{c}')
+            tag = '🐦' if c == CLASSE_UCCELLO else ''
+            parti.append(f"{n}{tag} {v*100:.0f}%")
+        print(f"[AI] frame {larghezza_frame}x{righe_analisi} | {' | '.join(parti) if parti else 'niente'}   ", end='\r')
 
     return uccelli_trovati
 

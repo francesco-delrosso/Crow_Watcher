@@ -271,16 +271,13 @@ def conta_avvistamenti_oggi():
 # AI
 # ============================================================
 
-def trova_uccelli(rete_ai, frame):
-    # Dimensioni reali dal frame, non da fotocamera.get() che può restituire 0
-    altezza_frame, larghezza_frame = frame.shape[:2]
+TILE_RIGHE = 3   # divide il frame in 3x2 riquadri
+TILE_COLS  = 2
 
-    # Ritaglia la parte bassa del frame (strada) prima di analizzare
-    righe_analisi = int(altezza_frame * ZONA_RILEVAMENTO)
-    frame_analisi = frame[:righe_analisi, :]
-
+def _analizza_tile(rete_ai, tile):
+    """Analizza un singolo riquadro, restituisce lista di (conf, classe)."""
     blob = cv2.dnn.blobFromImage(
-        frame_analisi,
+        tile,
         scalefactor=1.0 / 255.0,
         size=(DIMENSIONE_MODELLO, DIMENSIONE_MODELLO),
         mean=(0, 0, 0),
@@ -288,48 +285,61 @@ def trova_uccelli(rete_ai, frame):
         crop=False
     )
     rete_ai.setInput(blob)
-    predizioni = np.squeeze(rete_ai.forward()).T
+    pred = np.squeeze(rete_ai.forward()).T
+    risultati = []
+    for r in pred:
+        ps = r[4:]
+        c  = int(np.argmax(ps))
+        v  = float(ps[c])
+        risultati.append((v, c, r[0], r[1], r[2], r[3]))
+    return risultati
 
-    scala_x = larghezza_frame / DIMENSIONE_MODELLO
-    scala_y = altezza_frame / DIMENSIONE_MODELLO
+
+def trova_uccelli(rete_ai, frame):
+    altezza_frame, larghezza_frame = frame.shape[:2]
+
+    tile_h = altezza_frame // TILE_RIGHE
+    tile_w = larghezza_frame // TILE_COLS
+
     uccelli_trovati = []
     miglior = (0.0, -1)
+    tutti_debug = []
 
-    for r in predizioni:
-        punteggi = r[4:]
-        classe   = int(np.argmax(punteggi))
-        conf     = float(punteggi[classe])
-        if conf > miglior[0]:
-            miglior = (conf, classe)
-        if classe == CLASSE_UCCELLO and conf >= SOGLIA_CONFIDENZA:
-            cx = r[0] * scala_x
-            cy = r[1] * scala_y
-            w  = r[2] * scala_x
-            h  = r[3] * scala_y
-            uccelli_trovati.append({
-                'x1': int(cx - w/2), 'y1': int(cy - h/2),
-                'x2': int(cx + w/2), 'y2': int(cy + h/2),
-                'confidenza': conf
-            })
+    for riga in range(TILE_RIGHE):
+        for col in range(TILE_COLS):
+            y0 = riga * tile_h
+            y1 = y0 + tile_h
+            x0 = col * tile_w
+            x1 = x0 + tile_w
+            tile = frame[y0:y1, x0:x1]
+
+            for (v, c, cx_rel, cy_rel, w_rel, h_rel) in _analizza_tile(rete_ai, tile):
+                if v > miglior[0]:
+                    miglior = (v, c)
+                if v > 0.04:
+                    tutti_debug.append((v, c))
+                if c == CLASSE_UCCELLO and v >= SOGLIA_CONFIDENZA:
+                    # Riporta coordinate nel frame originale
+                    cx = (x0 + cx_rel * tile_w)
+                    cy = (y0 + cy_rel * tile_h)
+                    w  = w_rel * tile_w
+                    h  = h_rel * tile_h
+                    uccelli_trovati.append({
+                        'x1': int(cx - w/2), 'y1': int(cy - h/2),
+                        'x2': int(cx + w/2), 'y2': int(cy + h/2),
+                        'confidenza': v
+                    })
 
     if DEBUG_AI:
         nomi = {0:'persona', 1:'bici', 2:'auto', 14:'uccello', 15:'gatto', 16:'cane', 47:'bicchiere', 63:'laptop', 67:'telefono'}
-        # Top 3 classi per capire cosa vede l'AI
-        tutti = []
-        for r in predizioni:
-            ps = r[4:]
-            c  = int(np.argmax(ps))
-            v  = float(ps[c])
-            if v > 0.04:
-                tutti.append((v, c))
-        tutti.sort(reverse=True)
-        top3 = tutti[:3]
+        tutti_debug.sort(reverse=True)
+        top3 = tutti_debug[:3]
         parti = []
         for v, c in top3:
             n = nomi.get(c, f'cls{c}')
             tag = '🐦' if c == CLASSE_UCCELLO else ''
             parti.append(f"{n}{tag} {v*100:.0f}%")
-        print(f"[AI] frame {larghezza_frame}x{righe_analisi} | {' | '.join(parti) if parti else 'niente'}   ", end='\r')
+        print(f"[AI] {TILE_RIGHE}x{TILE_COLS}tile | {' | '.join(parti) if parti else 'niente'}   ", end='\r')
 
     return uccelli_trovati
 

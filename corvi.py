@@ -24,10 +24,10 @@ SECONDI_SENZA_CORVO     = 30
 CARTELLA_VIDEO          = "/sdcard/rilevatore_corvi/"
 MODELLO_AI              = "/sdcard/rilevatore_corvi/yolov8n.onnx"
 DATABASE                = "/sdcard/rilevatore_corvi/corvi.db"
-SOGLIA_CONFIDENZA       = 0.25
+SOGLIA_CONFIDENZA       = 0.10
 CLASSE_UCCELLO          = 14
 DIMENSIONE_MODELLO      = 640
-ZONA_RILEVAMENTO        = 0.70   # analizza solo il top X% del frame (es. 0.70 = ignora il 30% in basso)
+ZONA_RILEVAMENTO        = 1.00   # 1.0 = analizza tutto il frame
 ANALIZZA_OGNI_N_FRAME   = 10
 SECONDI_MINIMI_CORVO    = 5
 SECONDI_BUFFER_FINE     = 4    # secondi di buffer dopo che il corvo sparisce

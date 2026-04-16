@@ -192,15 +192,26 @@ _coda_ai     = queue.Queue(maxsize=1)
 _uccelli_ai  = []
 _lock_ai     = threading.Lock()
 
+DEBOUNCE_POSITIVI = 2   # rilevamenti consecutivi necessari per triggerare
+
+_contatore_positivi = 0  # quante analisi consecutive hanno trovato un uccello
+
 def _ai_worker(rete_ai):
-    """Riceve zone di movimento, classifica con AI."""
-    global _uccelli_ai
+    global _uccelli_ai, _contatore_positivi
     while True:
         try:
-            zone = _coda_ai.get(timeout=1)
-            risultato = trova_uccelli(rete_ai, zone)
+            frame = _coda_ai.get(timeout=1)
+            conf  = trova_uccelli(rete_ai, frame)
             with _lock_ai:
-                _uccelli_ai = risultato
+                if conf >= SOGLIA_CONFIDENZA:
+                    _contatore_positivi += 1
+                else:
+                    _contatore_positivi = 0
+                # Segnala corvo solo dopo N conferme consecutive
+                if _contatore_positivi >= DEBOUNCE_POSITIVI:
+                    _uccelli_ai = [{'confidenza': conf}]
+                else:
+                    _uccelli_ai = []
         except queue.Empty:
             continue
 
@@ -208,10 +219,9 @@ def leggi_uccelli_ai():
     with _lock_ai:
         return list(_uccelli_ai)
 
-def invia_zone_ad_ai(zone):
-    """Manda le zone di movimento all'AI (non bloccante)."""
+def invia_frame_ad_ai(frame):
     try:
-        _coda_ai.put_nowait(zone)
+        _coda_ai.put_nowait(frame.copy())
     except queue.Full:
         pass
 
@@ -267,92 +277,46 @@ def conta_avvistamenti_oggi():
 # MOTION DETECTION (gira su ogni frame nel loop principale)
 # ============================================================
 
-_sottrazione = cv2.createBackgroundSubtractorMOG2(
-    history=500, varThreshold=50, detectShadows=False
-)
-_kernel_mog = np.ones((5, 5), np.uint8)
-
-def estrai_zone_movimento(frame):
+def trova_uccelli(rete_ai, frame):
     """
-    Gira su OGNI frame. Aggiorna il background model e restituisce
-    una lista di crop (x1,y1,x2,y2,crop) delle zone in movimento significativo.
+    Analizza il frame con tiling 3x2.
+    Restituisce la massima confidenza trovata per la classe uccello.
     """
-    h, w = frame.shape[:2]
-    maschera = _sottrazione.apply(frame)
-    maschera = cv2.morphologyEx(maschera, cv2.MORPH_OPEN,   _kernel_mog)
-    maschera = cv2.morphologyEx(maschera, cv2.MORPH_DILATE, _kernel_mog, iterations=3)
-    contorni, _ = cv2.findContours(maschera, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    h, w   = frame.shape[:2]
+    righe, cols = 3, 2
+    th, tw = h // righe, w // cols
 
-    zone = []
-    for cnt in contorni:
-        if cv2.contourArea(cnt) < MOG_AREA_MINIMA:
-            continue
-        x, y, cw, ch = cv2.boundingRect(cnt)
-        x1 = max(0, x - MOG_PADDING)
-        y1 = max(0, y - MOG_PADDING)
-        x2 = min(w, x + cw + MOG_PADDING)
-        y2 = min(h, y + ch + MOG_PADDING)
-        crop = frame[y1:y2, x1:x2]
-        if crop.size > 0:
-            zone.append((x1, y1, x2, y2, crop))
-    return zone
+    miglior_conf = 0.0
+    tutti_debug  = []
 
-
-# ============================================================
-# AI (gira in thread separato solo sulle zone in movimento)
-# ============================================================
-
-def classifica_crop(rete_ai, crop):
-    """Restituisce la confidenza che il crop contenga un uccello."""
-    blob = cv2.dnn.blobFromImage(
-        crop,
-        scalefactor=1.0 / 255.0,
-        size=(DIMENSIONE_MODELLO, DIMENSIONE_MODELLO),
-        mean=(0, 0, 0),
-        swapRB=True,
-        crop=False
-    )
-    rete_ai.setInput(blob)
-    pred = np.squeeze(rete_ai.forward()).T
-    miglior_uccello = 0.0
-    debug_top = []
-    for r in pred:
-        ps = r[4:]
-        c  = int(np.argmax(ps))
-        v  = float(ps[c])
-        if v > 0.05:
-            debug_top.append((v, c))
-        if c == CLASSE_UCCELLO and v > miglior_uccello:
-            miglior_uccello = v
-    return miglior_uccello, debug_top
-
-
-def trova_uccelli(rete_ai, zone):
-    """
-    Riceve le zone di movimento già estratte (non il frame intero).
-    Classifica ciascuna e restituisce quelle con un uccello.
-    """
-    uccelli_trovati = []
-    tutti_debug     = []
-
-    for (x1, y1, x2, y2, crop) in zone:
-        conf, dbg = classifica_crop(rete_ai, crop)
-        tutti_debug.extend(dbg)
-        if conf >= SOGLIA_CONFIDENZA:
-            uccelli_trovati.append({
-                'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
-                'confidenza': conf
-            })
+    for r in range(righe):
+        for c in range(cols):
+            tile = frame[r*th:(r+1)*th, c*tw:(c+1)*tw]
+            blob = cv2.dnn.blobFromImage(
+                tile, 1.0/255.0,
+                (DIMENSIONE_MODELLO, DIMENSIONE_MODELLO),
+                mean=(0,0,0), swapRB=True, crop=False
+            )
+            rete_ai.setInput(blob)
+            pred = np.squeeze(rete_ai.forward()).T
+            for det in pred:
+                ps   = det[4:]
+                cls  = int(np.argmax(ps))
+                conf = float(ps[cls])
+                if conf > 0.04:
+                    tutti_debug.append((conf, cls))
+                if cls == CLASSE_UCCELLO and conf > miglior_conf:
+                    miglior_conf = conf
 
     if DEBUG_AI:
         nomi = {0:'persona', 2:'auto', 14:'uccello', 15:'gatto', 16:'cane', 67:'telefono'}
         tutti_debug.sort(reverse=True)
-        top = tutti_debug[:3]
-        parti = [f"{nomi.get(c,f'cls{c}')}{'🐦' if c==CLASSE_UCCELLO else ''} {v*100:.0f}%" for v,c in top]
-        label = f"mov:{len(zone)} | {' | '.join(parti) if parti else 'niente'}"
-        print(f"[AI] {label}   ", end='\r')
+        parti = [f"{nomi.get(c,f'cls{c}')}{'🐦' if c==CLASSE_UCCELLO else ''} {v*100:.0f}%"
+                 for v, c in tutti_debug[:3]]
+        trovato = '🐦 TROVATO!' if miglior_conf >= SOGLIA_CONFIDENZA else ''
+        print(f"[AI] {trovato} {' | '.join(parti) if parti else 'niente'}   ", end='\r')
 
-    return uccelli_trovati
+    return miglior_conf
 
 
 # ============================================================
@@ -613,12 +577,9 @@ def main():
             contatore_frame += 1
             momento_attuale  = time.time()
 
-            # MOG2 su ogni frame — aggiorna background model e trova zone di movimento
-            zone = estrai_zone_movimento(frame)
-
-            # Se ci sono zone di movimento, manda all'AI (non bloccante)
-            if zone:
-                invia_zone_ad_ai(zone)
+            # Manda frame all'AI ogni N frame (non bloccante)
+            if contatore_frame % 5 == 0:
+                invia_frame_ad_ai(frame)
 
             # Legge il risultato più recente dell'AI (mai bloccante)
             uccelli_correnti = leggi_uccelli_ai()

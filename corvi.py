@@ -192,12 +192,12 @@ _coda_ai     = queue.Queue(maxsize=1)
 _uccelli_ai  = []
 _lock_ai     = threading.Lock()
 
-def _ai_worker(rete_ai, larghezza, altezza):
+def _ai_worker(rete_ai):
     global _uccelli_ai
     while True:
         try:
             frame = _coda_ai.get(timeout=1)
-            risultato = trova_uccelli(rete_ai, frame, larghezza, altezza)
+            risultato = trova_uccelli(rete_ai, frame)
             with _lock_ai:
                 _uccelli_ai = risultato
         except queue.Empty:
@@ -265,7 +265,10 @@ def conta_avvistamenti_oggi():
 # AI
 # ============================================================
 
-def trova_uccelli(rete_ai, frame, larghezza_frame, altezza_frame):
+def trova_uccelli(rete_ai, frame):
+    # Dimensioni reali dal frame, non da fotocamera.get() che può restituire 0
+    altezza_frame, larghezza_frame = frame.shape[:2]
+
     # Ritaglia la parte bassa del frame (strada) prima di analizzare
     righe_analisi = int(altezza_frame * ZONA_RILEVAMENTO)
     frame_analisi = frame[:righe_analisi, :]
@@ -532,7 +535,7 @@ def main():
         time.sleep(0.05)
 
     # Avvia il thread AI
-    threading.Thread(target=_ai_worker, args=(rete_ai, larghezza, altezza), daemon=True).start()
+    threading.Thread(target=_ai_worker, args=(rete_ai,), daemon=True).start()
     print("[AI] Thread avviato")
 
     # --- Stato ---

@@ -192,11 +192,17 @@ _coda_ai     = queue.Queue(maxsize=1)
 _uccelli_ai  = []
 _lock_ai     = threading.Lock()
 
+_debug_frame_counter = 0
+
 def _ai_worker(rete_ai):
-    global _uccelli_ai
+    global _uccelli_ai, _debug_frame_counter
     while True:
         try:
             frame = _coda_ai.get(timeout=1)
+            # Salva un frame ogni 50 analisi per debug visivo
+            _debug_frame_counter += 1
+            if _debug_frame_counter % 50 == 0:
+                cv2.imwrite('/sdcard/rilevatore_corvi/debug_frame.jpg', frame)
             risultato = trova_uccelli(rete_ai, frame)
             with _lock_ai:
                 _uccelli_ai = risultato

@@ -24,7 +24,7 @@ SECONDI_SENZA_CORVO     = 30
 CARTELLA_VIDEO          = "/sdcard/rilevatore_corvi/"
 MODELLO_AI              = "/sdcard/rilevatore_corvi/yolov8n.onnx"
 DATABASE                = "/sdcard/rilevatore_corvi/corvi.db"
-SOGLIA_CONFIDENZA       = 0.10
+SOGLIA_CONFIDENZA       = 0.05
 CLASSE_UCCELLO          = 14
 DIMENSIONE_MODELLO      = 640
 ZONA_RILEVAMENTO        = 1.00   # 1.0 = analizza tutto il frame
@@ -314,7 +314,7 @@ def trova_uccelli(rete_ai, frame):
             ps = r[4:]
             c  = int(np.argmax(ps))
             v  = float(ps[c])
-            if v > 0.10:
+            if v > 0.04:
                 tutti.append((v, c))
         tutti.sort(reverse=True)
         top3 = tutti[:3]

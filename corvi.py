@@ -271,13 +271,18 @@ def conta_avvistamenti_oggi():
 # AI
 # ============================================================
 
-TILE_RIGHE = 3   # divide il frame in 3x2 riquadri
-TILE_COLS  = 2
+MOG_AREA_MINIMA = 1500   # pixel di movimento minimo per triggerare l'AI
+MOG_PADDING     = 80    # pixel di contesto attorno all'area di movimento
 
-def _analizza_tile(rete_ai, tile):
-    """Analizza un singolo riquadro, restituisce lista di (conf, classe)."""
+# Sottrazione sfondo — impara il background e rileva i movimenti
+_sottrazione = cv2.createBackgroundSubtractorMOG2(
+    history=300, varThreshold=40, detectShadows=False
+)
+
+def _ai_su_crop(rete_ai, crop):
+    """Esegue l'AI su un crop, restituisce la miglior confidenza per classe uccello."""
     blob = cv2.dnn.blobFromImage(
-        tile,
+        crop,
         scalefactor=1.0 / 255.0,
         size=(DIMENSIONE_MODELLO, DIMENSIONE_MODELLO),
         mean=(0, 0, 0),
@@ -286,60 +291,63 @@ def _analizza_tile(rete_ai, tile):
     )
     rete_ai.setInput(blob)
     pred = np.squeeze(rete_ai.forward()).T
-    risultati = []
+    miglior_uccello = 0.0
+    tutti = []
     for r in pred:
         ps = r[4:]
         c  = int(np.argmax(ps))
         v  = float(ps[c])
-        risultati.append((v, c, r[0], r[1], r[2], r[3]))
-    return risultati
+        if v > 0.04:
+            tutti.append((v, c))
+        if c == CLASSE_UCCELLO and v > miglior_uccello:
+            miglior_uccello = v
+    return miglior_uccello, tutti
 
 
 def trova_uccelli(rete_ai, frame):
     altezza_frame, larghezza_frame = frame.shape[:2]
 
-    tile_h = altezza_frame // TILE_RIGHE
-    tile_w = larghezza_frame // TILE_COLS
+    # Step 1: motion detection — trova dove si muove qualcosa
+    maschera = _sottrazione.apply(frame)
+    kernel   = np.ones((5, 5), np.uint8)
+    maschera = cv2.morphologyEx(maschera, cv2.MORPH_OPEN,  kernel)
+    maschera = cv2.morphologyEx(maschera, cv2.MORPH_DILATE, kernel, iterations=2)
+    contorni, _ = cv2.findContours(maschera, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     uccelli_trovati = []
-    miglior = (0.0, -1)
-    tutti_debug = []
+    tutti_debug     = []
+    zone_analizzate = 0
 
-    for riga in range(TILE_RIGHE):
-        for col in range(TILE_COLS):
-            y0 = riga * tile_h
-            y1 = y0 + tile_h
-            x0 = col * tile_w
-            x1 = x0 + tile_w
-            tile = frame[y0:y1, x0:x1]
+    for cnt in contorni:
+        if cv2.contourArea(cnt) < MOG_AREA_MINIMA:
+            continue  # movimento troppo piccolo (foglie, rumore)
 
-            for (v, c, cx_rel, cy_rel, w_rel, h_rel) in _analizza_tile(rete_ai, tile):
-                if v > miglior[0]:
-                    miglior = (v, c)
-                if v > 0.04:
-                    tutti_debug.append((v, c))
-                if c == CLASSE_UCCELLO and v >= SOGLIA_CONFIDENZA:
-                    # Riporta coordinate nel frame originale
-                    cx = (x0 + cx_rel * tile_w)
-                    cy = (y0 + cy_rel * tile_h)
-                    w  = w_rel * tile_w
-                    h  = h_rel * tile_h
-                    uccelli_trovati.append({
-                        'x1': int(cx - w/2), 'y1': int(cy - h/2),
-                        'x2': int(cx + w/2), 'y2': int(cy + h/2),
-                        'confidenza': v
-                    })
+        x, y, w, h = cv2.boundingRect(cnt)
+        # Aggiungi contesto attorno all'area di movimento
+        x1 = max(0, x - MOG_PADDING)
+        y1 = max(0, y - MOG_PADDING)
+        x2 = min(larghezza_frame, x + w + MOG_PADDING)
+        y2 = min(altezza_frame,   y + h + MOG_PADDING)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
+
+        zone_analizzate += 1
+        conf_uccello, debug_cls = _ai_su_crop(rete_ai, crop)
+        tutti_debug.extend(debug_cls)
+
+        if conf_uccello >= SOGLIA_CONFIDENZA:
+            uccelli_trovati.append({
+                'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                'confidenza': conf_uccello
+            })
 
     if DEBUG_AI:
-        nomi = {0:'persona', 1:'bici', 2:'auto', 14:'uccello', 15:'gatto', 16:'cane', 47:'bicchiere', 63:'laptop', 67:'telefono'}
+        nomi = {0:'persona', 2:'auto', 14:'uccello', 15:'gatto', 16:'cane', 67:'telefono'}
         tutti_debug.sort(reverse=True)
         top3 = tutti_debug[:3]
-        parti = []
-        for v, c in top3:
-            n = nomi.get(c, f'cls{c}')
-            tag = '🐦' if c == CLASSE_UCCELLO else ''
-            parti.append(f"{n}{tag} {v*100:.0f}%")
-        print(f"[AI] {TILE_RIGHE}x{TILE_COLS}tile | {' | '.join(parti) if parti else 'niente'}   ", end='\r')
+        parti = [f"{nomi.get(c,f'cls{c}')}{'🐦' if c==CLASSE_UCCELLO else ''} {v*100:.0f}%" for v,c in top3]
+        print(f"[AI] mov:{zone_analizzate} | {' | '.join(parti) if parti else 'niente'}   ", end='\r')
 
     return uccelli_trovati
 

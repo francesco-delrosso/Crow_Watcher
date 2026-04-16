@@ -20,7 +20,7 @@ from config import TELEGRAM_TOKEN
 # IMPOSTAZIONI
 # ============================================================
 
-SECONDI_SENZA_CORVO     = 30
+SECONDI_SENZA_CORVO     = 10
 CARTELLA_VIDEO          = "/sdcard/rilevatore_corvi/"
 MODELLO_AI              = "/sdcard/rilevatore_corvi/yolov8n.onnx"
 DATABASE                = "/sdcard/rilevatore_corvi/corvi.db"
@@ -29,7 +29,7 @@ CLASSE_UCCELLO          = 14
 DIMENSIONE_MODELLO      = 640
 MOG_AREA_MINIMA         = 800   # area minima movimento in pixel (filtra foglie/rumore)
 MOG_PADDING             = 100   # contesto attorno all'area di movimento
-SECONDI_MINIMI_CORVO    = 5
+SECONDI_MINIMI_CORVO    = 2
 SECONDI_BUFFER_FINE     = 4    # secondi di buffer dopo che il corvo sparisce
 RISOLUZIONE_SALVATAGGIO = (1920, 1080)
 FPS_SALVATAGGIO         = 30

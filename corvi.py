@@ -31,9 +31,9 @@ ZONA_RILEVAMENTO        = 0.70   # analizza solo il top X% del frame (es. 0.70 =
 ANALIZZA_OGNI_N_FRAME   = 10
 SECONDI_MINIMI_CORVO    = 5
 SECONDI_BUFFER_FINE     = 4    # secondi di buffer dopo che il corvo sparisce
-RISOLUZIONE_SALVATAGGIO = (1280, 720)
+RISOLUZIONE_SALVATAGGIO = (1920, 1080)
 FPS_SALVATAGGIO         = 30
-RISOLUZIONE_TELEGRAM    = (854, 480)
+RISOLUZIONE_TELEGRAM    = (1280, 720)
 FPS_TELEGRAM            = 30
 TELEGRAM_CANALE         = "@crowwatcher"
 FILE_UTENTI             = "/sdcard/rilevatore_corvi/utenti.txt"
@@ -410,7 +410,7 @@ def comprimi_video(percorso_originale):
     try:
         subprocess.run([
             "ffmpeg", "-i", percorso_originale,
-            "-vf", f"scale={lw}:{lh}",
+            "-vf", f"scale={lw}:-2",   # -2 = mantieni aspect ratio, no stretch
             "-c:v", "libx264", "-crf", "18",
             "-preset", "fast", "-r", str(FPS_TELEGRAM),
             "-an", "-y", out
@@ -502,6 +502,11 @@ def main():
     if not fotocamera.isOpened():
         print("ERRORE: IP Webcam non raggiungibile.")
         return
+
+    # Richiedi risoluzione nativa C920
+    fotocamera.set(cv2.CAP_PROP_FRAME_WIDTH,  RISOLUZIONE_SALVATAGGIO[0])
+    fotocamera.set(cv2.CAP_PROP_FRAME_HEIGHT, RISOLUZIONE_SALVATAGGIO[1])
+    fotocamera.set(cv2.CAP_PROP_FPS, FPS_SALVATAGGIO)
 
     larghezza = int(fotocamera.get(cv2.CAP_PROP_FRAME_WIDTH))
     altezza   = int(fotocamera.get(cv2.CAP_PROP_FRAME_HEIGHT))

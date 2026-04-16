@@ -24,7 +24,7 @@ SECONDI_SENZA_CORVO     = 30
 CARTELLA_VIDEO          = "/sdcard/rilevatore_corvi/"
 MODELLO_AI              = "/sdcard/rilevatore_corvi/yolov8n.onnx"
 DATABASE                = "/sdcard/rilevatore_corvi/corvi.db"
-SOGLIA_CONFIDENZA       = 0.05
+SOGLIA_CONFIDENZA       = 0.30
 CLASSE_UCCELLO          = 14
 DIMENSIONE_MODELLO      = 640
 ZONA_RILEVAMENTO        = 1.00   # 1.0 = analizza tutto il frame

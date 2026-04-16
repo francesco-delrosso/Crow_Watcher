@@ -188,36 +188,24 @@ def leggi_frame():
 # ============================================================
 
 # Coda con maxsize=1: tiene solo l'ultimo frame, l'AI non accumula lavoro arretrato
-_coda_ai     = queue.Queue(maxsize=1)
-_uccelli_ai  = []
-_lock_ai     = threading.Lock()
-
-DEBOUNCE_POSITIVI = 2   # rilevamenti consecutivi necessari per triggerare
-
-_contatore_positivi = 0  # quante analisi consecutive hanno trovato un uccello
+_coda_ai  = queue.Queue(maxsize=1)
+_conf_ai  = 0.0   # ultima confidenza calcolata dall'AI (float)
+_lock_ai  = threading.Lock()
 
 def _ai_worker(rete_ai):
-    global _uccelli_ai, _contatore_positivi
+    global _conf_ai
     while True:
         try:
             frame = _coda_ai.get(timeout=1)
             conf  = trova_uccelli(rete_ai, frame)
             with _lock_ai:
-                if conf >= SOGLIA_CONFIDENZA:
-                    _contatore_positivi += 1
-                else:
-                    _contatore_positivi = 0
-                # Segnala corvo solo dopo N conferme consecutive
-                if _contatore_positivi >= DEBOUNCE_POSITIVI:
-                    _uccelli_ai = [{'confidenza': conf}]
-                else:
-                    _uccelli_ai = []
+                _conf_ai = conf
         except queue.Empty:
             continue
 
-def leggi_uccelli_ai():
+def leggi_conf_ai():
     with _lock_ai:
-        return list(_uccelli_ai)
+        return _conf_ai
 
 def invia_frame_ad_ai(frame):
     try:
@@ -552,6 +540,7 @@ def main():
     secondi_corvo_totali = 0.0
     ultimo_tick_corvo    = None
     ultimo_check_utenti  = 0
+    n_positivi           = 0   # debounce nel loop principale
 
     print("\n" + "=" * 55)
     print("  ATTIVO — CTRL+C per uscire")
@@ -581,15 +570,18 @@ def main():
             if contatore_frame % 5 == 0:
                 invia_frame_ad_ai(frame)
 
-            # Legge il risultato più recente dell'AI (mai bloccante)
-            uccelli_correnti = leggi_uccelli_ai()
+            # Legge confidenza AI più recente (mai bloccante) e applica debounce
+            conf_corrente = leggi_conf_ai()
+            if conf_corrente >= SOGLIA_CONFIDENZA:
+                n_positivi += 1
+            else:
+                n_positivi = 0
+            corvo_visibile = n_positivi >= 2
 
             # Check nuovi utenti ogni 30 secondi
             if momento_attuale - ultimo_check_utenti >= 30:
                 threading.Thread(target=registra_nuovi_utenti, daemon=True).start()
                 ultimo_check_utenti = momento_attuale
-
-            corvo_visibile = len(uccelli_correnti) > 0
 
             # Scrivi il frame ogni volta che la registrazione è attiva
             if sta_registrando and scrittore_video is not None:
@@ -624,7 +616,7 @@ def main():
                     sta_registrando = True
                     print(f"\n[REC] Inizio → {nome_file_video}")
 
-                print(f"[REC] {len(uccelli_correnti)} corvo/i | {secondi_corvo_totali:.0f}s   ", end='\r')
+                print(f"[REC] corvo {conf_corrente*100:.0f}% | {secondi_corvo_totali:.0f}s   ", end='\r')
 
             else:
                 ultimo_tick_corvo = None
@@ -668,7 +660,7 @@ def main():
 
                         nome_file_video      = None
                         tempo_ultimo_corvo   = None
-                        uccelli_correnti     = []
+                        n_positivi           = 0
                         secondi_corvo_totali = 0.0
                         timestamp_inizio_av  = None
 

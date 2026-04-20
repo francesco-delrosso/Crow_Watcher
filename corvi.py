@@ -25,12 +25,12 @@ MODELLO_AI              = "/sdcard/rilevatore_corvi/yolov8n.onnx"
 DATABASE                = "/sdcard/rilevatore_corvi/corvi.db"
 SOGLIA_CONFIDENZA       = 0.25
 CLASSE_UCCELLO          = 14
-DIMENSIONE_MODELLO      = 640
+DIMENSIONE_MODELLO      = 320
 SECONDI_DOPO_ULTIMO     = 15      # secondi di registrazione dopo ultimo rilevamento
-RISOLUZIONE_SALVATAGGIO = (1920, 1080)
-FPS_SALVATAGGIO         = 30
-RISOLUZIONE_TELEGRAM    = (1280, 720)
-FPS_TELEGRAM            = 30
+RISOLUZIONE_SALVATAGGIO = (1280, 720)
+FPS_SALVATAGGIO         = 15
+RISOLUZIONE_TELEGRAM    = (854, 480)
+FPS_TELEGRAM            = 15
 TELEGRAM_CANALE         = "@crowwatcher"
 FILE_UTENTI             = "/sdcard/rilevatore_corvi/utenti.txt"
 FILE_OFFSET             = "/sdcard/rilevatore_corvi/telegram_offset.txt"
@@ -180,29 +180,23 @@ def _ai_worker(rete):
             _conf_ai = conf
 
 def _analizza_frame(rete, frame):
-    h, w = frame.shape[:2]
-    righe, cols = 3, 2
-    th, tw = h // righe, w // cols
     miglior = 0.0
     debug = []
 
-    for r in range(righe):
-        for c in range(cols):
-            tile = frame[r*th:(r+1)*th, c*tw:(c+1)*tw]
-            blob = cv2.dnn.blobFromImage(
-                tile, 1/255.0, (DIMENSIONE_MODELLO, DIMENSIONE_MODELLO),
-                mean=(0,0,0), swapRB=True, crop=False
-            )
-            rete.setInput(blob)
-            pred = np.squeeze(rete.forward()).T
-            for det in pred:
-                ps = det[4:]
-                cls = int(np.argmax(ps))
-                conf = float(ps[cls])
-                if conf > 0.04:
-                    debug.append((conf, cls))
-                if cls == CLASSE_UCCELLO and conf > miglior:
-                    miglior = conf
+    blob = cv2.dnn.blobFromImage(
+        frame, 1/255.0, (DIMENSIONE_MODELLO, DIMENSIONE_MODELLO),
+        mean=(0,0,0), swapRB=True, crop=False
+    )
+    rete.setInput(blob)
+    pred = np.squeeze(rete.forward()).T
+    for det in pred:
+        ps = det[4:]
+        cls = int(np.argmax(ps))
+        conf = float(ps[cls])
+        if conf > 0.04:
+            debug.append((conf, cls))
+        if cls == CLASSE_UCCELLO and conf > miglior:
+            miglior = conf
 
     nomi = {0:'persona', 2:'auto', 14:'uccello', 15:'gatto', 16:'cane'}
     debug.sort(reverse=True)
@@ -439,8 +433,7 @@ def main():
         print("ERRORE: camera non raggiungibile")
         return
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, RISOLUZIONE_SALVATAGGIO[0])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RISOLUZIONE_SALVATAGGIO[1])
+    # Risoluzione gestita da USB Camera Pro, non serve settarla qui
 
     threading.Thread(target=_camera_worker, args=(cap,), daemon=True).start()
     while leggi_frame() is None:
@@ -483,7 +476,7 @@ def main():
             now = time.time()
 
             # Manda frame ad AI ogni 5 frame
-            if cnt % 5 == 0:
+            if cnt % 15 == 0:
                 manda_frame_ai(frame)
 
             # Leggi confidenza AI (nessun debounce, lettura diretta)
